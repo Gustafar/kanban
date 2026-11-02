@@ -4,11 +4,15 @@ import { useBoard } from './useBoard'
 import type { ColumnId } from './types'
 import { Board } from './components/Board'
 import { CardDrawer } from './components/CardDrawer'
+import { ContextMenu } from './components/ContextMenu'
+import type { MenuItem } from './components/ContextMenu'
+import { useConfirm } from './components/ConfirmDialog'
 import { Modal, NewCardDialog, ProjectDialog } from './components/Dialogs'
-import { Bell, Gear, Logo, Plus, Search } from './components/Icons'
+import { Bell, Gear, Logo, Plus, Search, SidebarToggle } from './components/Icons'
 import { MiniLimits } from './components/LimitMeters'
 import { QuickBar } from './components/QuickBar'
 import { UsageDialog } from './components/UsageDialog'
+import { COLUMNS } from './types'
 import type { Card } from './types'
 
 type Dialog = { kind: 'card'; column: ColumnId } | { kind: 'project'; edit: boolean } | { kind: 'help' } | { kind: 'usage' } | null
@@ -35,6 +39,15 @@ export default function App() {
   const [openCard, setOpenCard] = useState<number | null>(null)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [perm, setPerm] = useState(canNotify ? Notification.permission : 'denied')
+  const [menu, setMenu] = useState<{ card: Card; x: number; y: number } | null>(null)
+  const confirm = useConfirm()
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('rail-collapsed') === '1' } catch { return false }
+  })
+  const toggleRail = () => setCollapsed(c => {
+    try { localStorage.setItem('rail-collapsed', c ? '0' : '1') } catch { /* storage unavailable */ }
+    return !c
+  })
 
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -79,6 +92,19 @@ export default function App() {
   }), [b.subscribe])
 
   const { setError } = b
+  const [updating, setUpdating] = useState(false)
+  async function applyUpdate() {
+    setUpdating(true)
+    try { await api.applyUpdate() } catch (e) { setUpdating(false); setError((e as Error).message); return }
+    // the server stays up while building and goes down only for the swap: reload once it is back
+    const started = Date.now()
+    let down = false
+    const poll = setInterval(async () => {
+      const ok = await fetch('/api/status').then(r => r.ok).catch(() => false)
+      if (!ok) down = true
+      if ((ok && down) || Date.now() - started > 5 * 60_000) { clearInterval(poll); location.reload() }
+    }, 2000)
+  }
   const onError = useCallback((m: string) => setError(m), [setError])
 
   function move(id: number, column: ColumnId, position: number) {
@@ -89,12 +115,46 @@ export default function App() {
     })
   }
 
+  async function removeCard(c: Card) {
+    const running = c.runStatus === 'running' || c.runStatus === 'queued'
+    const ok = await confirm({
+      title: 'Excluir este card?',
+      message: <>
+        <strong>{c.title || 'Sem título'}</strong> será removido com comentários, anexos e histórico de execuções.
+        {running && ' A execução em andamento será interrompida.'} Isso não pode ser desfeito.
+      </>,
+      confirmLabel: 'Excluir card',
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await api.deleteCard(c.id)
+      b.setCards(l => l.filter(x => x.id !== c.id))
+      setOpenCard(o => (o === c.id ? null : o))
+    } catch (e) { onError((e as Error).message) }
+  }
+
+  function menuItems(c: Card): MenuItem[] {
+    const idle = !c.runStatus || ['failed', 'cancelled', 'discarded'].includes(c.runStatus)
+    const items: MenuItem[] = [{ label: 'Abrir', onSelect: () => setOpenCard(c.id) }]
+    if (idle) items.push({ label: c.runStatus ? 'Executar de novo' : 'Executar com IA', onSelect: () => api.runCard(c.id).catch(e => onError(e.message)) })
+    COLUMNS.filter(col => col.id !== c.column).forEach((col, i) => {
+      const last = Math.max(0, ...b.cards.filter(x => x.column === col.id).map(x => x.position))
+      items.push({ label: col.title, group: i === 0 ? 'Mover para' : undefined, separator: i === 0, onSelect: () => move(c.id, col.id, last + 1024) })
+    })
+    items.push({ label: 'Excluir card', danger: true, separator: true, onSelect: () => removeCard(c) })
+    return items
+  }
+
   if (!b.loaded) return <div className="splash">Carregando…</div>
 
   return (
-    <div className="app">
+    <div className="app" data-collapsed={collapsed || undefined}>
       <nav className="rail" aria-label="Projetos">
-        <div className="brand"><Logo /><span>Kanban</span></div>
+        <div className="brand">
+          <Logo /><span>Kanban</span>
+          <button className="icon-btn rail-toggle" onClick={toggleRail} aria-label="Minimizar barra lateral" title="Minimizar barra lateral"><SidebarToggle /></button>
+        </div>
         <ul>
           {b.projects.map((p, i) => (
             <li key={p.id}>
@@ -130,6 +190,7 @@ export default function App() {
         {project ? (
           <>
             <header className="topbar">
+              {collapsed && <button className="icon-btn rail-expand" onClick={toggleRail} aria-label="Mostrar barra lateral" title="Mostrar barra lateral"><SidebarToggle /></button>}
               <div className="topbar-title">
                 <h1>{project.name}</h1>
                 <span className="path" title={project.path}>{project.path}</span>
@@ -168,7 +229,7 @@ export default function App() {
                 <span className="welcome-hint"><kbd>n</kbd> para começar a escrever</span>
               </div>
             ) : (
-              <Board cards={visible} live={b.live} onMove={move} onOpen={setOpenCard} onAdd={column => setDialog({ kind: 'card', column })} />
+              <Board cards={visible} live={b.live} onMove={move} onOpen={setOpenCard} onAdd={column => setDialog({ kind: 'card', column })} onMenu={(card, x, y) => setMenu({ card, x, y })} />
             )}
             <QuickBar key={project.id} ref={quickRef} project={project} onError={onError} />
           </>
@@ -201,9 +262,18 @@ export default function App() {
         />
       )}
 
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.card)} onClose={() => setMenu(null)} />}
+
       <div className="toasts" aria-live="polite">
         {!b.online && <div className="toast warn">Sem conexão com o servidor. Tentando reconectar…</div>}
         {b.error && <div className="toast err" role="alert">{b.error}<button onClick={() => b.setError('')} aria-label="Dispensar">×</button></div>}
+        {b.update && (
+          <div className="toast update" role="status">
+            <strong>Novas atualizações</strong>
+            <span>{updating ? 'Atualizando… o app reinicia em instantes.' : `Do card “${b.update.title || 'sem título'}”.`}</span>
+            <button onClick={applyUpdate} disabled={updating}>{updating ? 'Atualizando…' : 'Atualizar'}</button>
+          </div>
+        )}
         {b.notices.map(n => (
           <button key={n.id} className="toast note" data-kind={n.kind} onClick={() => { setOpenCard(n.cardId); b.dismissNotice(n.id) }}>
             <strong>{n.title}</strong><span>{n.body}</span>

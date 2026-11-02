@@ -9,7 +9,7 @@ Kanban pessoal e local. Cada projeto aponta para um repositório git; ao mover u
 .\uninstall.ps1   # remove a inicialização e os atalhos (os dados ficam)
 ```
 
-Depois disso nada precisa ficar aberto: o servidor roda em segundo plano, o log fica em `%APPDATA%\kanban-board\server.log` e `kb open` abre o board no navegador. Depois de mudar o código, rode `.\install.ps1` de novo.
+Depois disso nada precisa ficar aberto: o servidor roda em segundo plano, o log fica em `%APPDATA%\kanban-board\server.log` e `cardume` (em qualquer pasta, num terminal novo) abre o board já no projeto daquela pasta, criando o projeto se ele ainda não existir; `cardume <caminho>` faz o mesmo para outra pasta. Depois de mudar o código, rode `.\install.ps1` de novo.
 
 ## Rodar só uma vez (com terminal)
 

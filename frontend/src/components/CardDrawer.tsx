@@ -5,6 +5,7 @@ import { COLUMNS, isImage } from '../types'
 import type { Attachment, Card, Comment, Mode, Project, Run, RunEvent } from '../types'
 import { STATUS_LABEL } from './CardView'
 import { Branch, Clip, Close, Send } from './Icons'
+import { useConfirm } from './ConfirmDialog'
 import { ModeToggle } from './Dialogs'
 import { DiffView } from './DiffView'
 import { Markdown } from './Markdown'
@@ -67,6 +68,9 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   const [tagsText, setTagsText] = useState(card.tags.join(', '))
   const [files, setFiles] = useState<Attachment[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
+  const [viewer, setViewer] = useState<Attachment | null>(null)
+  const viewerRef = useRef<Attachment | null>(null)
+  viewerRef.current = viewer
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<RunEvent[]>([])
   const [comments, setComments] = useState<Comment[]>([])
@@ -77,6 +81,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   const [composer, setComposer] = useState<Composer>('comment')
   const [busy, setBusy] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const confirm = useConfirm()
 
   const run = runs[0] // newest first
   const runId = run?.id
@@ -111,7 +116,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveShortcut.current() }
-      else if (e.key === 'Escape') onClose()
+      else if (e.key === 'Escape') { if (viewerRef.current) setViewer(null); else onClose() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -240,16 +245,25 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
                   <ul className="attachment-grid">
                     {files.map(a => (
                       <li key={a.id}>
-                        <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" title={a.name}>
+                        <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" title={a.name}
+                          onClick={e => { if (isImage(a.mime)) { e.preventDefault(); setViewer(a) } }}>
                           {isImage(a.mime) ? <img src={`/api/attachments/${a.id}`} alt={a.name} loading="lazy" /> : <span className="file-ext">{(a.name.split('.').pop() || 'arq').slice(0, 4)}</span>}
                           <span className="attachment-name">{a.name}</span>
                         </a>
-                        <button onClick={() => { if (confirm(`Remover "${a.name}"?`)) guard(() => api.deleteAttachment(a.id)) }} aria-label={`Remover ${a.name}`}><Close /></button>
+                        <button onClick={async () => { if (await confirm({ title: 'Remover anexo?', message: <><strong>{a.name}</strong> será removido deste card.</>, confirmLabel: 'Remover', danger: true })) guard(() => api.deleteAttachment(a.id)) }} aria-label={`Remover ${a.name}`}><Close /></button>
                       </li>
                     ))}
                   </ul>
                 )}
             </section>
+
+            {viewer && (
+              <div className="lightbox" role="dialog" aria-label={viewer.name} onClick={() => setViewer(null)}>
+                <button className="lightbox-close" onClick={() => setViewer(null)} aria-label="Fechar imagem"><Close /></button>
+                <img src={`/api/attachments/${viewer.id}`} alt={viewer.name} onClick={e => e.stopPropagation()} />
+                <span className="lightbox-name">{viewer.name}</span>
+              </div>
+            )}
 
             <div className="field-block">
               <div className="field-title">Execução</div>
@@ -294,11 +308,11 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
                 </>}
                 {finished && <>
                   <button className="btn primary" disabled={busy} onClick={() => guard(() => api.merge(run!.id))}>{direct ? 'Aceitar mudanças' : 'Fazer merge na branch atual'}</button>
-                  <button className="btn ghost" disabled={busy} onClick={() => {
-                    const msg = direct
-                      ? 'Restaurar a pasta ao estado de antes desta execução? Qualquer alteração feita na pasta depois disso, inclusive por você, também será desfeita.'
-                      : 'Descartar a branch e o worktree desta execução?'
-                    if (confirm(msg)) guard(() => api.discard(run!.id))
+                  <button className="btn ghost" disabled={busy} onClick={async () => {
+                    const ok = await confirm(direct
+                      ? { title: 'Desfazer na pasta?', message: 'A pasta volta ao estado de antes desta execução. Qualquer alteração feita nela depois disso, inclusive por você, também será desfeita.', confirmLabel: 'Desfazer', danger: true }
+                      : { title: 'Descartar execução?', message: 'A branch e o worktree desta execução serão descartados.', confirmLabel: 'Descartar', danger: true })
+                    if (ok) guard(() => api.discard(run!.id))
                   }}>{direct ? 'Desfazer na pasta' : 'Descartar'}</button>
                   <button className="btn ghost" onClick={() => setTab('diff')}>Ver mudanças</button>
                 </>}
@@ -376,7 +390,10 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
               </div>
             </>
           ) : (
-            <button className="btn ghost danger-text" onClick={() => { if (confirm('Excluir este card?')) guard(async () => { await api.deleteCard(card.id); onClose() }) }}>Excluir card</button>
+            <button className="btn ghost danger-text" onClick={async () => {
+              const ok = await confirm({ title: 'Excluir este card?', message: <><strong>{card.title || 'Sem título'}</strong> será removido com comentários, anexos e histórico de execuções. Isso não pode ser desfeito.</>, confirmLabel: 'Excluir card', danger: true })
+              if (ok) guard(async () => { await api.deleteCard(card.id); onClose() })
+            }}>Excluir card</button>
           )}
         </footer>
       </aside>

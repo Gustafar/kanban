@@ -14,8 +14,9 @@ import (
 	"time"
 )
 
-const usage = `kb - CLI do kanban board
+const usage = `cardume (kb) - CLI do board
 
+  cardume [caminho]                        abre o board no projeto da pasta atual (cria o projeto se não existir)
   kb projects                              lista projetos
   kb project-add <nome> [caminho]          cria projeto (caminho padrão: pasta atual)
   kb ls [projeto]                          lista cards (projeto por nome ou id)
@@ -28,7 +29,7 @@ const usage = `kb - CLI do kanban board
   kb diff <card>                           mostra o diff da última execução
   kb merge <card>                          faz merge da branch do card
   kb mcp                                   servidor MCP (stdio) para o Claude usar o board
-  kb open                                  abre o board no navegador (já com o token)
+  kb open                                  abre o board no navegador, sem escolher projeto
 
 env: KB_URL (padrão http://localhost:7777), KB_TOKEN`
 
@@ -147,18 +148,18 @@ func latestRun(cid int64) run {
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fmt.Println(usage)
+		openFolder("")
 		return
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "help", "-h", "--help":
+		fmt.Println(usage)
 	case "mcp":
 		serveMCP()
 	case "open":
 		url := base + "/?token=" + token()
-		if err := exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start(); err != nil {
-			die("não consegui abrir o navegador: %v", err)
-		}
+		openBrowser(url)
 		fmt.Println("abrindo", base)
 	case "projects":
 		var ps []project
@@ -262,6 +263,62 @@ func main() {
 		call("POST", fmt.Sprintf("/api/runs/%d/merge", r.ID), nil, nil)
 		fmt.Println("merge feito")
 	default:
+		if fi, err := os.Stat(cmd); err == nil && fi.IsDir() {
+			openFolder(cmd)
+			return
+		}
 		fmt.Println(usage)
 	}
+}
+
+func openBrowser(url string) {
+	if err := exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start(); err != nil {
+		die("não consegui abrir o navegador: %v", err)
+	}
+}
+
+// folderRoot resolves dir to its git root when it has one, otherwise to dir itself.
+func folderRoot(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		die("caminho inválido: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel").Output(); err == nil {
+		if top := strings.TrimSpace(string(out)); top != "" {
+			return filepath.Clean(top)
+		}
+	}
+	return abs
+}
+
+// within reports whether path is dir or lives under it (case-insensitive, as on Windows).
+func within(path, dir string) bool {
+	path, dir = strings.ToLower(filepath.Clean(path)), strings.ToLower(filepath.Clean(dir))
+	return path == dir || strings.HasPrefix(path, strings.TrimRight(dir, `\/`)+string(filepath.Separator))
+}
+
+// openFolder opens the board on the project that owns dir (default: the current folder), registering it first if needed.
+func openFolder(dir string) {
+	if dir == "" {
+		dir = "."
+	}
+	abs, _ := filepath.Abs(dir)
+	var ps []project
+	call("GET", "/api/projects", nil, &ps)
+	var found *project
+	for i, p := range ps {
+		if within(abs, p.Path) && (found == nil || len(p.Path) > len(found.Path)) {
+			found = &ps[i]
+		}
+	}
+	if found == nil {
+		root := folderRoot(abs)
+		name := filepath.Base(root)
+		var p project
+		call("POST", "/api/projects", map[string]string{"name": name, "path": root}, &p)
+		found = &p
+		fmt.Printf("projeto %q criado em %s\n", p.Name, p.Path)
+	}
+	fmt.Printf("abrindo %s\n", found.Name)
+	openBrowser(fmt.Sprintf("%s/?token=%s&project=%d", base, token(), found.ID))
 }

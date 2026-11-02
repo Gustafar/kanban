@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { api } from '../api'
+import { useConfirm } from './ConfirmDialog'
 import { COLUMNS } from '../types'
 import type { ColumnId, Inspection, Isolation, Mode, Project } from '../types'
 
@@ -87,6 +88,7 @@ export function ProjectDialog({ project, onClose, onSaved, onError }: {
   const [touched, setTouched] = useState(!!project) // once the user picks a mode, stop auto-detecting
   const [info, setInfo] = useState<Inspection | null>(null)
   const [busy, setBusy] = useState(false)
+  const confirm = useConfirm()
 
   // look at the folder as the user types: git repo -> isolated copy, plain folder -> edit directly
   useEffect(() => {
@@ -123,7 +125,14 @@ export function ProjectDialog({ project, onClose, onSaved, onError }: {
   }
 
   async function remove() {
-    if (!project || !confirm(`Excluir "${project.name}" e todos os cards? Os arquivos da pasta não são apagados.`)) return
+    if (!project) return
+    const ok = await confirm({
+      title: 'Excluir projeto?',
+      message: <><strong>{project.name}</strong> e todos os cards serão removidos. Os arquivos da pasta não são apagados.</>,
+      confirmLabel: 'Excluir projeto',
+      danger: true,
+    })
+    if (!ok) return
     try { await api.deleteProject(project.id); onSaved(null); onClose() } catch (err) { onError((err as Error).message) }
   }
 

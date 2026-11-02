@@ -9,7 +9,8 @@ export const Logo = () => (
   </svg>
 )
 export const Plus =() => <svg {...base}><path d="M12 5v14M5 12h14" /></svg>
-export const Close = () => <svg {...base}><path d="M18 6 6 18M6 6l12 12" /></svg>
+export const SidebarToggle = () => <svg {...base}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
+export const Close =() => <svg {...base}><path d="M18 6 6 18M6 6l12 12" /></svg>
 export const Hand = () => <svg {...base}><path d="M18 11V6a2 2 0 0 0-4 0v1M14 7V4a2 2 0 0 0-4 0v3M10 7V5a2 2 0 0 0-4 0v8M18 11a2 2 0 0 1 4 0v3a8 8 0 0 1-8 8h-1a8 8 0 0 1-6.5-3.3L3 14a2 2 0 0 1 3.2-2.4L8 13" /></svg>
 export const Bolt = () => <svg {...base}><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>
 export const Bell = () => <svg {...base}><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" /></svg>

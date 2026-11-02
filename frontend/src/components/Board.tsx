@@ -15,9 +15,10 @@ interface Props {
   onMove: (id: number, column: ColumnId, position: number) => void
   onOpen: (id: number) => void
   onAdd: (column: ColumnId) => void
+  onMenu: (card: Card, x: number, y: number) => void
 }
 
-function SortableCard({ card, live, onOpen }: { card: Card; live?: string; onOpen: (id: number) => void }) {
+function SortableCard({ card, live, onOpen, onMenu }: { card: Card; live?: string; onOpen: (id: number) => void; onMenu: Props['onMenu'] }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id })
   return (
     <CardView
@@ -26,16 +27,24 @@ function SortableCard({ card, live, onOpen }: { card: Card; live?: string; onOpe
       liveLine={live}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.35 : 1 }}
       onClick={() => onOpen(card.id)}
-      onKeyDown={e => { if (e.key === 'Enter') onOpen(card.id) }}
+      onContextMenu={e => { e.preventDefault(); onMenu(card, e.clientX, e.clientY) }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') onOpen(card.id)
+        else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault()
+          const r = e.currentTarget.getBoundingClientRect()
+          onMenu(card, r.left + 24, r.top + 24)
+        }
+      }}
       {...attributes}
       {...listeners}
     />
   )
 }
 
-function Column({ id, title, hint, cards, live, onOpen, onAdd }: {
+function Column({ id, title, hint, cards, live, onOpen, onAdd, onMenu }: {
   id: ColumnId; title: string; hint: string; cards: Card[]; live: Record<number, string>
-  onOpen: (id: number) => void; onAdd: (column: ColumnId) => void
+  onOpen: (id: number) => void; onAdd: (column: ColumnId) => void; onMenu: Props['onMenu']
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}` })
   return (
@@ -48,7 +57,7 @@ function Column({ id, title, hint, cards, live, onOpen, onAdd }: {
       </header>
       <div ref={setNodeRef} className="column-body">
         <SortableContext items={cards.map(c => c.id)} strategy={verticalListSortingStrategy}>
-          {cards.map(c => <SortableCard key={c.id} card={c} live={live[c.id]} onOpen={onOpen} />)}
+          {cards.map(c => <SortableCard key={c.id} card={c} live={live[c.id]} onOpen={onOpen} onMenu={onMenu} />)}
         </SortableContext>
         {cards.length === 0 && <p className="column-empty">{hint}</p>}
       </div>
@@ -64,7 +73,7 @@ function positionBetween(prev?: Card, next?: Card): number {
   return 1024
 }
 
-export function Board({ cards, live, onMove, onOpen, onAdd }: Props) {
+export function Board({ cards, live, onMove, onOpen, onAdd, onMenu }: Props) {
   const [activeId, setActiveId] = useState<number | null>(null)
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
@@ -117,7 +126,7 @@ export function Board({ cards, live, onMove, onOpen, onAdd }: Props) {
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setActiveId(null)}>
       <div className="board">
         {COLUMNS.map(col => (
-          <Column key={col.id} {...col} cards={byColumn[col.id]} live={live} onOpen={onOpen} onAdd={onAdd} />
+          <Column key={col.id} {...col} cards={byColumn[col.id]} live={live} onOpen={onOpen} onAdd={onAdd} onMenu={onMenu} />
         ))}
       </div>
       <DragOverlay dropAnimation={{ duration: 160 }}>

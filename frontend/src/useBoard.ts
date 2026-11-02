@@ -22,6 +22,7 @@ export function useBoard() {
   const [online, setOnline] = useState(true)
   const [status, setStatus] = useState<ServerStatus>({ max: 2, running: 0, queued: 0 })
   const [limits, setLimits] = useState<Limits | null>(null)
+  const [update, setUpdate] = useState<{ cardId: number; title: string } | null>(null)
 
   const projectIdRef = useRef<number | null>(null)
   projectIdRef.current = projectId
@@ -63,6 +64,7 @@ export function useBoard() {
       // events missed while offline: resync
       api.status().then(setStatus).catch(() => {})
       api.limits().then(setLimits).catch(() => {})
+      api.pendingUpdate().then(r => setUpdate(r.pending)).catch(() => {})
       if (projectIdRef.current != null) loadCards(projectIdRef.current).catch(() => {})
     }
     es.onerror = () => setOnline(false)
@@ -89,6 +91,7 @@ export function useBoard() {
         }
         case 'status': setStatus(data); break
         case 'limits': setLimits(data); break
+        case 'update': setUpdate(data.pending); break
         case 'notify': {
           const n = { ...data, id: ++noticeSeq.current } as Notice
           setNotices(l => [...l, n])
@@ -101,6 +104,12 @@ export function useBoard() {
     return () => es.close()
   }, [loadCards, loadProjects])
 
+  // keep the sidebar usage meters current without the user opening the usage panel
+  useEffect(() => {
+    const t = setInterval(() => { api.refreshLimits().then(setLimits).catch(() => {}) }, 60_000)
+    return () => clearInterval(t)
+  }, [])
+
   const subscribe = useCallback((fn: BoardListener) => {
     listeners.current.add(fn)
     return () => { listeners.current.delete(fn) }
@@ -109,6 +118,7 @@ export function useBoard() {
   const dismissNotice = (id: number) => setNotices(l => l.filter(n => n.id !== id))
 
   return {
+    update,
     projects, projectId, setProjectId, cards, setCards, live, notices, dismissNotice,
     error, setError, loaded, online, status, setStatus, limits, setLimits, subscribe, reloadProjects: loadProjects,
   }

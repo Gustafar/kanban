@@ -1,0 +1,16 @@
+.btn.danger-solid { background: var(--rose); color: #fff; border-color: transparent; }
+.btn.danger-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--rose) 85%, #000); }
+
+.modal.confirm { width: min(420px, calc(100vw - 24px)); }
+.modal.confirm .modal-title { font-size: 20px; margin-bottom: 8px; }
+.confirm-msg { color: var(--slate); line-height: 1.5; margin-bottom: 20px; }
+.modal.confirm .actions { justify-content: flex-end; }
+
+.ctx-menu { position: fixed; z-index: 200; min-width: 200px; margin: 0; padding: 6px; list-style: none; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow); }
+.ctx-menu li[data-sep] { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.ctx-menu button { display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: 8px; background: none; border: 0; color: var(--ink); }
+.ctx-menu button:hover:not(:disabled), .ctx-menu button:focus-visible { background: var(--lane); outline: none; }
+.ctx-menu button:disabled { opacity: 0.45; cursor: not-allowed; }
+.ctx-menu button[data-danger] { color: var(--rose); }
+.ctx-menu button[data-danger]:hover:not(:disabled), .ctx-menu button[data-danger]:focus-visible { background: var(--rose-soft); }
+.ctx-group { display: block; padding: 6px 10px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--slate); }

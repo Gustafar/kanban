@@ -4,3 +4,6 @@ backend/web/dist/*
 !backend/web/dist/.gitkeep
 *.db
 *.db-*
+frontend/*.tsbuildinfo
+# plano de trabalho compartilhado entre sessões (não vai pro git)
+PLANO.md

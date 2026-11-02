@@ -34,6 +34,7 @@ type Runner struct {
 
 	mcpBin, baseURL, token string
 	limitsSink             func(limits.Snapshot)
+	onReview               func(store.Card) // a card just entered review
 }
 
 // modelArgs turns the card's model/effort choice into CLI flags; an empty choice leaves the CLI default.
@@ -47,6 +48,9 @@ func modelArgs(c store.Card) []string {
 	}
 	return a
 }
+
+// SetOnReview is called whenever a finished run moves its card into review.
+func (r *Runner) SetOnReview(fn func(store.Card)) { r.onReview = fn }
 
 // SetLimitsSink receives the plan-usage snapshot found in each run's stream.
 func (r *Runner) SetLimitsSink(fn func(limits.Snapshot)) { r.limitsSink = fn }
@@ -450,6 +454,9 @@ func (r *Runner) finish(run store.Run, card store.Card, status, errMsg string) {
 		if c, err := r.store.GetCard(card.ID); err == nil && c.Column == "doing" {
 			if mv, err := r.store.MoveCard(card.ID, "review", c.Position); err == nil {
 				r.publish("card", mv)
+				if r.onReview != nil {
+					r.onReview(mv)
+				}
 			}
 		}
 	case "failed":

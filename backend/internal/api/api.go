@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 
 	"kanban_board/internal/limits"
 	"kanban_board/internal/runner"
+	"kanban_board/internal/selfupdate"
 	"kanban_board/internal/store"
 )
 
@@ -26,6 +28,9 @@ type Server struct {
 	token   string
 	dataDir string
 	static  fs.FS // optional embedded frontend
+
+	updateMu sync.Mutex
+	update   *pendingUpdate // app update waiting for the user's go-ahead
 
 	limits    *limits.Tracker // plan usage windows (5h / 7d), fed by every Claude call
 	probeMu   sync.Mutex
@@ -47,6 +52,7 @@ func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
 		}
 	}
 	srv.runner.SetMax(limit)
+	srv.runner.SetOnReview(srv.reinstallOnReview)
 	srv.reconcileAcceptedRuns()
 
 	// plan limits: persisted so the panel is not empty after a restart; every run's stream refreshes them
@@ -74,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/events", s.sse)
 
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/update", s.getUpdate)
+	mux.HandleFunc("POST /api/update", s.applyUpdate)
 	mux.HandleFunc("GET /api/usage", s.usage)
 	mux.HandleFunc("GET /api/limits", s.getLimits)
 	mux.HandleFunc("POST /api/limits/refresh", s.refreshLimits)
@@ -499,12 +507,66 @@ func (s *Server) moveCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.hub.Publish("card", c)
+	if b.Column == "review" && prev.Column != "review" {
+		s.reinstallOnReview(c)
+	}
 	if b.Column == "doing" && prev.Column != "doing" {
 		s.runner.Request(c, "")
 		c, _ = s.store.GetCard(c.ID)
 		s.hub.Publish("card", c)
 	}
 	writeJSON(w, 200, c)
+}
+
+type pendingUpdate struct {
+	CardID int64  `json:"cardId"`
+	Title  string `json:"title"`
+	source string
+}
+
+func (s *Server) getUpdate(w http.ResponseWriter, r *http.Request) {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	writeJSON(w, 200, map[string]any{"pending": s.update})
+}
+
+// applyUpdate installs the pending update (the server restarts, so the page has to reconnect).
+func (s *Server) applyUpdate(w http.ResponseWriter, r *http.Request) {
+	s.updateMu.Lock()
+	u := s.update
+	s.update = nil
+	s.updateMu.Unlock()
+	root := selfupdate.Root()
+	if u == nil || root == "" {
+		log.Printf("auto-install: sem atualização pendente (pendente=%v, raiz=%q)", u != nil, root)
+		badRequest(w, "nenhuma atualização pendente")
+		return
+	}
+	if _, err := os.Stat(u.source); err != nil {
+		log.Printf("auto-install: %v", err)
+		badRequest(w, "a pasta do card não existe mais")
+		return
+	}
+	selfupdate.Install(root, u.source, s.dataDir)
+	writeJSON(w, 202, map[string]bool{"ok": true})
+}
+
+// reinstallOnReview offers an app update when a card of this very repo enters review. The build comes
+// from the card's worktree, so the reviewer can try the change in the real app; the user applies it.
+func (s *Server) reinstallOnReview(c store.Card) {
+	root := selfupdate.Root()
+	project, err := s.store.GetProject(c.ProjectID)
+	if root == "" || err != nil || !selfupdate.SamePath(project.Path, root) {
+		return
+	}
+	source := root
+	if run, err := s.store.LatestRun(c.ID); err == nil && run.WorktreePath != "" {
+		source = run.WorktreePath
+	}
+	s.updateMu.Lock()
+	s.update = &pendingUpdate{CardID: c.ID, Title: c.Title, source: source}
+	s.updateMu.Unlock()
+	s.hub.Publish("update", map[string]any{"pending": map[string]any{"cardId": c.ID, "title": c.Title}})
 }
 
 func (s *Server) deleteCard(w http.ResponseWriter, r *http.Request) {
