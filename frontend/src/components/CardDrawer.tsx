@@ -63,6 +63,20 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   const tagList = tagsText.split(',').map(t => t.trim()).filter(Boolean)
   const dirty = title !== card.title || description !== card.description || mode !== card.mode || tagList.join(', ') !== card.tags.join(', ')
 
+  const save = () => api.updateCard(card.id, { title, description, mode, tags: tagList })
+  const revert = () => { setTitle(card.title); setDescription(card.description); setMode(card.mode); setTagsText(card.tags.join(', ')) }
+
+  // Ctrl+S saves; the ref keeps the listener pointing at the latest field values
+  const saveShortcut = useRef<() => void>(() => {})
+  saveShortcut.current = () => { if (dirty && title.trim() && !busy) void guard(save) }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveShortcut.current() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   async function upload(list: File[]) {
     for (const f of list) {
       if (f.size > 15 * 1024 * 1024) { onError(`"${f.name}" passa de 15 MB.`); continue }
@@ -157,12 +171,6 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
           </section>
 
           <div className="field">Execução<ModeToggle value={mode} onChange={setMode} /></div>
-          {dirty && (
-            <div className="actions">
-              <button className="btn ghost" onClick={() => { setTitle(card.title); setDescription(card.description); setMode(card.mode); setTagsText(card.tags.join(', ')) }}>Desfazer</button>
-              <button className="btn primary" disabled={busy || !title.trim()} onClick={() => guard(() => api.updateCard(card.id, { title, description, mode, tags: tagList }))}>Salvar</button>
-            </div>
-          )}
 
           <section className="run-panel" data-status={status}>
             <div className="run-head">
@@ -174,7 +182,9 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
 
             <div className="actions wrap">
               {status === 'awaiting_approval' && <>
-                <button className="btn primary" disabled={busy} onClick={() => guard(() => api.approve(run!.id))}>Aprovar e executar</button>
+                <button className="btn primary" disabled={busy || !title.trim()} onClick={() => guard(async () => { if (dirty) await save(); await api.approve(run!.id) })}>
+                  {dirty ? 'Salvar e aprovar' : 'Aprovar e executar'}
+                </button>
                 <button className="btn ghost" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Recusar</button>
               </>}
               {status === 'running' && <button className="btn danger" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Parar execução</button>}
@@ -191,14 +201,15 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
                   if (confirm(msg)) guard(() => api.discard(run!.id))
                 }}>{direct ? 'Desfazer na pasta' : 'Descartar'}</button>
               </>}
-              {(!status || status === 'failed' || status === 'cancelled') && (
-                <button className="btn primary" disabled={busy || dirty} onClick={() => guard(() => api.runCard(card.id))}>
-                  {status ? 'Executar de novo' : 'Executar com IA'}
+              {status === 'accepted' && <span className="muted queue-note">As mudanças já estão no projeto. Para continuar, peça um ajuste abaixo.</span>}
+              {(!status || status === 'failed' || status === 'cancelled' || status === 'discarded') && (
+                <button className="btn primary" disabled={busy || !title.trim()} onClick={() => guard(async () => { if (dirty) await save(); await api.runCard(card.id) })}>
+                  {dirty ? 'Salvar e executar' : status ? 'Executar de novo' : 'Executar com IA'}
                 </button>
               )}
             </div>
 
-            {(finished || status === 'failed') && (
+            {(finished || status === 'failed' || status === 'accepted') && (
               <form className="followup" onSubmit={e => { e.preventDefault(); if (message.trim()) guard(async () => { await api.runCard(card.id, message.trim()); setMessage('') }) }}>
                 <input value={message} onChange={e => setMessage(e.target.value)} placeholder="Pedir um ajuste (continua a mesma conversa)" aria-label="Pedir ajuste" />
                 <button className="btn" disabled={busy || !message.trim()}>Enviar</button>
@@ -241,8 +252,18 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
           )}
         </div>
 
-        <footer className="drawer-foot">
-          <button className="btn ghost danger-text" onClick={() => { if (confirm('Excluir este card?')) guard(async () => { await api.deleteCard(card.id); onClose() }) }}>Excluir card</button>
+        <footer className="drawer-foot" data-dirty={dirty || undefined}>
+          {dirty ? (
+            <>
+              <span className="unsaved"><i aria-hidden />Alterações não salvas</span>
+              <div className="actions">
+                <button className="btn ghost" disabled={busy} onClick={revert}>Desfazer</button>
+                <button className="btn primary" disabled={busy || !title.trim()} onClick={() => guard(save)} title="Salvar (Ctrl+S)">Salvar</button>
+              </div>
+            </>
+          ) : (
+            <button className="btn ghost danger-text" onClick={() => { if (confirm('Excluir este card?')) guard(async () => { await api.deleteCard(card.id); onClose() }) }}>Excluir card</button>
+          )}
         </footer>
       </aside>
     </>

@@ -127,15 +127,12 @@ func (r *Runner) Request(card store.Card, message string) (store.Run, error) {
 	if run, err := r.store.LatestRun(card.ID); err == nil && (run.Status == "running" || run.Status == "queued" || run.Status == "awaiting_approval") {
 		return run, nil // already queued/active
 	}
-	tmpl := promptTmpl
-	if p, err := r.store.GetProject(card.ProjectID); err == nil && p.Isolation == "direct" {
-		tmpl = promptDirectTmpl
-	}
-	prompt := fmt.Sprintf(tmpl, card.Title, card.Description)
+	// A follow-up carries its own message. A first run stores no prompt: it is built from the card
+	// when the run actually starts, so edits made while it waits for approval or in the queue are honoured.
+	prompt := ""
 	if message != "" {
-		prompt = message // follow-up on an existing session
+		prompt = message + r.attachmentBlock(card.ID)
 	}
-	prompt += r.attachmentBlock(card.ID)
 	auto := card.Mode == "auto"
 	status := "awaiting_approval"
 	if auto {
@@ -146,6 +143,7 @@ func (r *Runner) Request(card store.Card, message string) (store.Run, error) {
 		return run, err
 	}
 	r.publish("run", run)
+	r.publishCard(card.ID)
 	if auto {
 		r.schedule(run.ID)
 	} else {
@@ -184,6 +182,7 @@ func (r *Runner) Cancel(runID int64) error {
 		_ = r.store.UpdateRun(runID, "cancelled", "", "", "", "", nil, &now)
 		run, _ = r.store.GetRun(runID)
 		r.publish("run", run)
+		r.publishCard(run.CardID)
 	}
 	return nil
 }
@@ -207,6 +206,15 @@ func (r *Runner) execute(runID int64) {
 	}
 
 	direct := project.Isolation == "direct"
+
+	prompt := run.Prompt
+	if prompt == "" { // first run: describe the card as it is now
+		tmpl := promptTmpl
+		if direct {
+			tmpl = promptDirectTmpl
+		}
+		prompt = fmt.Sprintf(tmpl, card.Title, card.Description) + r.attachmentBlock(card.ID)
+	}
 	var shadow *Shadow
 	var branch, wt string
 	if direct {
@@ -285,7 +293,7 @@ func (r *Runner) execute(runID int64) {
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	proc.Hide(cmd)
 	cmd.Dir = wt
-	cmd.Stdin = strings.NewReader(run.Prompt) // stdin avoids Windows quoting issues
+	cmd.Stdin = strings.NewReader(prompt) // stdin avoids Windows quoting issues
 	stdout, _ := cmd.StdoutPipe()
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

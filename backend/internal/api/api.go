@@ -40,6 +40,7 @@ func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
 		}
 	}
 	srv.runner.SetMax(limit)
+	srv.reconcileAcceptedRuns()
 	return srv, hub
 }
 
@@ -614,10 +615,22 @@ func (s *Server) mergeRun(w http.ResponseWriter, r *http.Request) {
 		}
 		runner.Discard(p.Path, run.WorktreePath, run.Branch)
 	}
+	// "accepted" is final: accept/undo actions must not be offered (or honoured) again for this run
+	s.finishRun(run.ID, "accepted")
 	if mv, err := s.store.MoveCard(card.ID, "done", card.Position); err == nil {
 		s.hub.Publish("card", mv)
 	}
 	w.WriteHeader(204)
+}
+
+// finishRun sets a terminal status on a run and tells the browsers.
+func (s *Server) finishRun(runID int64, status string) {
+	if err := s.store.UpdateRun(runID, status, "", "", "", "", nil, nil); err != nil {
+		return
+	}
+	if run, err := s.store.GetRun(runID); err == nil {
+		s.hub.Publish("run", run)
+	}
 }
 
 func (s *Server) discardRun(w http.ResponseWriter, r *http.Request) {
@@ -626,8 +639,16 @@ func (s *Server) discardRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if run.Status == "running" {
-		badRequest(w, "cancele a execução antes de descartar")
+	switch run.Status {
+	case "succeeded", "failed", "cancelled":
+	case "accepted":
+		badRequest(w, "essas mudanças já foram aceitas; desfazer agora também apagaria o que veio depois")
+		return
+	case "discarded":
+		badRequest(w, "esta execução já foi descartada")
+		return
+	default:
+		badRequest(w, "cancele ou aguarde a execução antes de descartar")
 		return
 	}
 	if p.Isolation == "direct" {
@@ -646,6 +667,7 @@ func (s *Server) discardRun(w http.ResponseWriter, r *http.Request) {
 	} else {
 		runner.Discard(p.Path, run.WorktreePath, run.Branch)
 	}
+	s.finishRun(run.ID, "discarded")
 	if mv, err := s.store.MoveCard(card.ID, "todo", card.Position); err == nil {
 		s.hub.Publish("card", mv)
 	}

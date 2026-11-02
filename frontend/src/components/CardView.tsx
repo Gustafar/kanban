@@ -10,6 +10,8 @@ export const STATUS_LABEL: Record<string, string> = {
   succeeded: 'Pronto para revisão',
   failed: 'Falhou',
   cancelled: 'Cancelado',
+  accepted: 'Aceito',
+  discarded: 'Descartado',
 }
 
 interface Props extends HTMLAttributes<HTMLDivElement> {
@@ -21,7 +23,8 @@ interface Props extends HTMLAttributes<HTMLDivElement> {
 // Presentational card; drag wiring is passed in through the HTML props.
 export const CardView = forwardRef<HTMLDivElement, Props>(function CardView({ card, liveLine, dragging, style, ...rest }, ref) {
   const status = card.runStatus
-  const showStatus = status && !(status === 'succeeded' && card.column === 'done')
+  // an accepted card in Concluído is simply done: no badge needed
+  const showStatus = status && !((status === 'succeeded' || status === 'accepted') && card.column === 'done')
   return (
     <div
       ref={ref}

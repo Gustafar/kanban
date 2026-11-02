@@ -109,5 +109,14 @@ func (r *Runner) markStatus(runID int64, status string) {
 	}
 	if run, err := r.store.GetRun(runID); err == nil {
 		r.publish("run", run)
+		r.publishCard(run.CardID)
+	}
+}
+
+// publishCard pushes the card as it is now: its status badge is derived from its latest run,
+// so every run state change must be followed by a card update or the board shows a stale badge.
+func (r *Runner) publishCard(cardID int64) {
+	if c, err := r.store.GetCard(cardID); err == nil {
+		r.publish("card", c)
 	}
 }

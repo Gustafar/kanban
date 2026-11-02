@@ -1,6 +1,6 @@
 export type ColumnId = 'backlog' | 'todo' | 'doing' | 'review' | 'done'
 export type Mode = 'approval' | 'auto'
-export type RunStatus = 'awaiting_approval' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type RunStatus = 'awaiting_approval' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'accepted' | 'discarded'
 export interface ServerStatus { max: number; running: number; queued: number }
 
 export const COLUMNS: { id: ColumnId; title: string; hint: string }[] = [

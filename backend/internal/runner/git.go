@@ -36,6 +36,12 @@ func git(dir string, args ...string) (string, error) {
 	return s, nil
 }
 
+// BranchExists reports whether the branch is still in the repo (a merged/discarded run's branch is deleted).
+func BranchExists(projectPath, branch string) bool {
+	_, err := git(projectPath, "rev-parse", "--verify", "refs/heads/"+branch)
+	return err == nil
+}
+
 func isGitRepo(dir string) bool {
 	_, err := git(dir, "rev-parse", "--git-dir")
 	return err == nil
