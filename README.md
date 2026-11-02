@@ -10,6 +10,13 @@ Kanban pessoal e local. Cada projeto aponta para um repositório git; ao mover u
 
 Abra a URL `local:` ou `rede:` impressa no terminal (traz `?token=...`, que vira cookie). O token fica em `%APPDATA%\kanban-board\token`.
 
+## Dois modos por projeto
+
+- **Cópia isolada (git)**: a pasta precisa ser um repositório git local com um commit (sem GitHub). A IA trabalha num worktree em outra branch; você revisa o diff e faz merge.
+- **Direto na pasta**: serve para pastas sem git. A IA edita a pasta; antes de cada execução o app salva um snapshot num git "sombra" em `%APPDATA%\kanban-board\shadow\` (o projeto não ganha `.git`). Dá para ver o diff e "Desfazer na pasta". Só uma execução por vez edita a mesma pasta.
+
+Ao criar o projeto o app detecta o modo pela pasta, e o diálogo oferece "Iniciar git nesta pasta".
+
 ## Fluxo
 
 - Card **Com aprovação**: ao entrar em execução fica "Aguardando sua aprovação" até você aprovar. **Automático**: roda sozinho.

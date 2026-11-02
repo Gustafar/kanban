@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { api } from '../api'
 import { COLUMNS } from '../types'
-import type { ColumnId, Mode, Project } from '../types'
+import type { ColumnId, Inspection, Isolation, Mode, Project } from '../types'
 
 export const SWATCHES = ['#3355FF', '#23915F', '#D9930D', '#D2425A', '#8A4FFF', '#0F9CB8', '#E2662B', '#5A6678']
 
@@ -83,13 +83,37 @@ export function ProjectDialog({ project, onClose, onSaved, onError }: {
   const [name, setName] = useState(project?.name ?? '')
   const [path, setPath] = useState(project?.path ?? '')
   const [color, setColor] = useState(project?.color ?? SWATCHES[0])
+  const [isolation, setIsolation] = useState<Isolation>(project?.isolation ?? 'direct')
+  const [touched, setTouched] = useState(!!project) // once the user picks a mode, stop auto-detecting
+  const [info, setInfo] = useState<Inspection | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // look at the folder as the user types: git repo -> isolated copy, plain folder -> edit directly
+  useEffect(() => {
+    const p = path.trim()
+    if (!p) { setInfo(null); return }
+    const t = setTimeout(() => {
+      api.inspect(p).then(i => {
+        setInfo(i)
+        if (!touched && i.exists) setIsolation(i.isGit && i.hasCommit ? 'worktree' : 'direct')
+      }).catch(() => setInfo(null))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [path, touched])
+
+  const gitReady = !!info?.isGit && !!info.hasCommit
+  const needsGit = isolation === 'worktree' && info?.exists && !gitReady
+
+  async function startGit() {
+    setBusy(true)
+    try { setInfo(await api.gitInit(path.trim())) } catch (err) { onError((err as Error).message) } finally { setBusy(false) }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
     try {
-      const body = { name, path: path.trim(), color }
+      const body = { name, path: path.trim(), color, isolation }
       onSaved(project ? await api.updateProject(project.id, body) : await api.createProject(body))
       onClose()
     } catch (err) {
@@ -109,10 +133,33 @@ export function ProjectDialog({ project, onClose, onSaved, onError }: {
         <label>Nome
           <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: finance_app" />
         </label>
-        <label>Pasta do repositório git
+        <label>Pasta do projeto
           <input value={path} onChange={e => setPath(e.target.value)} placeholder="C:\Projetos\finance_app" spellCheck={false} />
-          <small>A IA trabalha numa cópia isolada (git worktree) dessa pasta, nunca direto nela.</small>
+          <small>
+            {!path.trim() ? 'Caminho da pasta no seu computador. Nada é enviado ao GitHub.'
+              : info && !info.exists ? 'Pasta não encontrada.'
+              : info ? (gitReady ? 'Pasta com git detectada.' : 'Esta pasta não usa git.') : ' '}
+          </small>
         </label>
+        <div className="field">Como a IA trabalha
+          <div className="segmented" role="radiogroup" aria-label="Isolamento">
+            {([['worktree', 'Cópia isolada (git)'], ['direct', 'Direto na pasta']] as const).map(([m, label]) => (
+              <button key={m} type="button" role="radio" aria-checked={isolation === m} data-on={isolation === m || undefined}
+                onClick={() => { setIsolation(m); setTouched(true) }}>{label}</button>
+            ))}
+          </div>
+          <small className="hint">
+            {isolation === 'worktree'
+              ? 'A IA trabalha numa cópia em outra branch. Você revisa o diff e faz merge. Precisa de git local, sem GitHub.'
+              : 'A IA edita os arquivos da pasta. O app guarda um snapshot antes de cada execução para você ver o diff e desfazer, sem criar .git no projeto.'}
+          </small>
+          {needsGit && (
+            <div className="notice">
+              <span>Para isolar, a pasta precisa ser um repositório git com um commit.</span>
+              <button type="button" className="btn" disabled={busy} onClick={startGit}>Iniciar git nesta pasta</button>
+            </div>
+          )}
+        </div>
         <div className="field">Cor
           <div className="swatches">
             {SWATCHES.map(c => (
@@ -124,7 +171,7 @@ export function ProjectDialog({ project, onClose, onSaved, onError }: {
           {project && <button type="button" className="btn danger" onClick={remove}>Excluir</button>}
           <span className="spacer" />
           <button type="button" className="btn ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn primary" disabled={busy || !name.trim() || !path.trim()}>{project ? 'Salvar' : 'Criar projeto'}</button>
+          <button className="btn primary" disabled={busy || !name.trim() || !path.trim() || !info?.exists || !!needsGit}>{project ? 'Salvar' : 'Criar projeto'}</button>
         </div>
       </form>
     </Modal>

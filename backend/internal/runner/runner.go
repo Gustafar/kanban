@@ -19,14 +19,32 @@ type Publisher func(typ string, data any)
 
 type Runner struct {
 	store   *store.Store
+	dataDir string
 	publish Publisher
 
 	mu      sync.Mutex
 	cancels map[int64]context.CancelFunc // runID -> cancel
+	busy    map[int64]bool               // projectID -> a direct-mode run is editing the folder
 }
 
-func New(s *store.Store, p Publisher) *Runner {
-	return &Runner{store: s, publish: p, cancels: map[int64]context.CancelFunc{}}
+func New(s *store.Store, dataDir string, p Publisher) *Runner {
+	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}}
+}
+
+func (r *Runner) lockProject(id int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.busy[id] {
+		return false
+	}
+	r.busy[id] = true
+	return true
+}
+
+func (r *Runner) unlockProject(id int64) {
+	r.mu.Lock()
+	delete(r.busy, id)
+	r.mu.Unlock()
 }
 
 const promptTmpl = `Você está trabalhando em uma tarefa de um quadro kanban, dentro de um git worktree isolado (branch própria).
@@ -40,13 +58,28 @@ Regras:
 - Rode os testes/build do projeto quando existirem.
 - Ao final, faça commit das mudanças com uma mensagem clara e resuma o que foi feito.`
 
+const promptDirectTmpl = `Você está trabalhando em uma tarefa de um quadro kanban, diretamente na pasta do projeto (que não usa git).
+
+# Tarefa: %s
+
+%s
+
+Regras:
+- Altere apenas o necessário para cumprir a tarefa.
+- Rode os testes/build do projeto quando existirem.
+- Não inicialize git nem faça commits. Ao final, resuma o que foi feito.`
+
 // Request is called when a card enters "doing" (or the user hits "run").
 // In "approval" mode it parks the run until Approve; in "auto" mode it starts right away.
 func (r *Runner) Request(card store.Card, message string) (store.Run, error) {
 	if run, err := r.store.LatestRun(card.ID); err == nil && (run.Status == "running" || run.Status == "awaiting_approval") {
 		return run, nil // already queued/active
 	}
-	prompt := fmt.Sprintf(promptTmpl, card.Title, card.Description)
+	tmpl := promptTmpl
+	if p, err := r.store.GetProject(card.ProjectID); err == nil && p.Isolation == "direct" {
+		tmpl = promptDirectTmpl
+	}
+	prompt := fmt.Sprintf(tmpl, card.Title, card.Description)
 	if message != "" {
 		prompt = message // follow-up on an existing session
 	}
@@ -124,14 +157,39 @@ func (r *Runner) execute(runID int64) {
 		return
 	}
 
-	branch, wt, err := ensureWorktree(project.Path, project.Name, card.ID, card.Title)
-	if err != nil {
-		r.finish(run, card, "failed", err.Error())
-		return
+	direct := project.Isolation == "direct"
+	var shadow *Shadow
+	var branch, wt string
+	if direct {
+		// one editor at a time: the folder is shared with you and with other cards
+		if !r.lockProject(project.ID) {
+			r.finish(run, card, "failed", "outra execução já está editando a pasta deste projeto; aguarde ela terminar")
+			return
+		}
+		defer r.unlockProject(project.ID)
+		wt = project.Path
+		if shadow, err = NewShadow(r.dataDir, project.ID, project.Path); err == nil {
+			var base string
+			if base, err = shadow.Snapshot("antes: " + card.Title); err == nil {
+				err = r.store.SetRunBaseRef(runID, base)
+			}
+		}
+		if err != nil {
+			r.finish(run, card, "failed", "não consegui salvar o estado da pasta: "+err.Error())
+			return
+		}
+		now := time.Now()
+		_ = r.store.UpdateRun(runID, "running", "", "", "", "", &now, nil)
+		r.emit(runID, "system", "executando direto em "+wt+" (snapshot salvo para diff e desfazer)")
+	} else {
+		if branch, wt, err = ensureWorktree(project.Path, project.Name, card.ID, card.Title); err != nil {
+			r.finish(run, card, "failed", err.Error())
+			return
+		}
+		now := time.Now()
+		_ = r.store.UpdateRun(runID, "running", "", branch, wt, "", &now, nil)
+		r.emit(runID, "system", "worktree: "+wt+" ("+branch+")")
 	}
-	now := time.Now()
-	_ = r.store.UpdateRun(runID, "running", "", branch, wt, "", &now, nil)
-	r.emit(runID, "system", "worktree: "+wt+" ("+branch+")")
 
 	// resume the previous Claude session for follow-ups on the same card
 	resume := ""
@@ -200,7 +258,13 @@ func (r *Runner) execute(runID int64) {
 		}
 		r.finish(run, card, "failed", msg)
 	default:
-		_ = commitAll(wt, "kanban: "+card.Title)
+		if direct {
+			if _, err := shadow.Snapshot("depois: " + card.Title); err != nil {
+				r.emit(runID, "error", "não consegui salvar o snapshot final: "+err.Error())
+			}
+		} else {
+			_ = commitAll(wt, "kanban: "+card.Title)
+		}
 		r.finish(run, card, "succeeded", "")
 	}
 }

@@ -17,17 +17,18 @@ import (
 )
 
 type Server struct {
-	store  *store.Store
-	hub    *Hub
-	runner *runner.Runner
-	token  string
-	static fs.FS // optional embedded frontend
+	store   *store.Store
+	hub     *Hub
+	runner  *runner.Runner
+	token   string
+	dataDir string
+	static  fs.FS // optional embedded frontend
 }
 
-func New(s *store.Store, token string, static fs.FS) (*Server, *Hub) {
+func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
 	hub := NewHub()
-	srv := &Server{store: s, hub: hub, token: token, static: static}
-	srv.runner = runner.New(s, hub.Publish)
+	srv := &Server{store: s, hub: hub, token: token, dataDir: dataDir, static: static}
+	srv.runner = runner.New(s, dataDir, hub.Publish)
 	return srv, hub
 }
 
@@ -35,6 +36,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/events", s.sse)
 
+	mux.HandleFunc("GET /api/inspect", s.inspect)
+	mux.HandleFunc("POST /api/git/init", s.gitInit)
 	mux.HandleFunc("GET /api/projects", s.listProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)
 	mux.HandleFunc("PUT /api/projects/{id}", s.updateProject)
@@ -171,19 +174,55 @@ func (s *Server) sse(w http.ResponseWriter, r *http.Request) {
 // ---- projects ----
 
 type projectBody struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	Color string `json:"color"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Color     string `json:"color"`
+	Isolation string `json:"isolation"` // "" = detect: git repo -> worktree, otherwise direct
 }
 
-func (b projectBody) validate() string {
+// validate checks the body and resolves the isolation mode.
+func (b *projectBody) validate() string {
 	if strings.TrimSpace(b.Name) == "" {
 		return "nome é obrigatório"
 	}
 	if fi, err := os.Stat(b.Path); err != nil || !fi.IsDir() {
 		return "caminho não existe ou não é uma pasta"
 	}
+	in := runner.Inspect(b.Path)
+	switch b.Isolation {
+	case "":
+		b.Isolation = "direct"
+		if in.IsGit && in.HasCommit {
+			b.Isolation = "worktree"
+		}
+	case "worktree":
+		if !in.IsGit || !in.HasCommit {
+			return "o modo isolado precisa de um repositório git com ao menos um commit; inicie o git na pasta ou escolha \"Direto na pasta\""
+		}
+	case "direct":
+	default:
+		return "modo de isolamento inválido"
+	}
 	return ""
+}
+
+func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, runner.Inspect(r.URL.Query().Get("path")))
+}
+
+func (s *Server) gitInit(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Path string `json:"path"`
+	}
+	if decode(r, &b) != nil || b.Path == "" {
+		badRequest(w, "caminho é obrigatório")
+		return
+	}
+	if err := runner.InitRepo(b.Path); err != nil {
+		badRequest(w, err.Error())
+		return
+	}
+	writeJSON(w, 200, runner.Inspect(b.Path))
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +244,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, msg)
 		return
 	}
-	p, err := s.store.CreateProject(strings.TrimSpace(b.Name), b.Path, b.Color)
+	p, err := s.store.CreateProject(strings.TrimSpace(b.Name), b.Path, b.Color, b.Isolation)
 	if err != nil {
 		fail(w, err)
 		return
@@ -224,7 +263,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, msg)
 		return
 	}
-	p, err := s.store.UpdateProject(pathID(r), strings.TrimSpace(b.Name), b.Path, b.Color)
+	p, err := s.store.UpdateProject(pathID(r), strings.TrimSpace(b.Name), b.Path, b.Color, b.Isolation)
 	if err != nil {
 		fail(w, err)
 		return
@@ -430,11 +469,19 @@ func (s *Server) runDiff(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if run.Branch == "" {
+	var d string
+	switch {
+	case p.Isolation == "direct" && run.BaseRef != "":
+		var sh *runner.Shadow
+		if sh, err = runner.NewShadow(s.dataDir, p.ID, p.Path); err == nil {
+			d, err = sh.Diff(run.BaseRef)
+		}
+	case run.Branch != "":
+		d, err = runner.Diff(p.Path, run.Branch)
+	default:
 		writeJSON(w, 200, map[string]string{"diff": ""})
 		return
 	}
-	d, err := runner.Diff(p.Path, run.Branch)
 	if err != nil {
 		fail(w, err)
 		return
@@ -448,15 +495,22 @@ func (s *Server) mergeRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if run.Status != "succeeded" || run.Branch == "" {
-		badRequest(w, "só é possível fazer merge de uma execução concluída")
+	if run.Status != "succeeded" {
+		badRequest(w, "só é possível aceitar uma execução concluída")
 		return
 	}
-	if err := runner.Merge(p.Path, run.Branch); err != nil {
-		badRequest(w, err.Error())
-		return
+	// direct mode: the changes are already in the folder, accepting just closes the card
+	if p.Isolation != "direct" {
+		if run.Branch == "" {
+			badRequest(w, "execução sem branch")
+			return
+		}
+		if err := runner.Merge(p.Path, run.Branch); err != nil {
+			badRequest(w, err.Error())
+			return
+		}
+		runner.Discard(p.Path, run.WorktreePath, run.Branch)
 	}
-	runner.Discard(p.Path, run.WorktreePath, run.Branch)
 	if mv, err := s.store.MoveCard(card.ID, "done", card.Position); err == nil {
 		s.hub.Publish("card", mv)
 	}
@@ -473,7 +527,22 @@ func (s *Server) discardRun(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "cancele a execução antes de descartar")
 		return
 	}
-	runner.Discard(p.Path, run.WorktreePath, run.Branch)
+	if p.Isolation == "direct" {
+		if run.BaseRef == "" {
+			badRequest(w, "não há snapshot para restaurar")
+			return
+		}
+		sh, err := runner.NewShadow(s.dataDir, p.ID, p.Path)
+		if err == nil {
+			err = sh.Restore(run.BaseRef)
+		}
+		if err != nil {
+			badRequest(w, err.Error())
+			return
+		}
+	} else {
+		runner.Discard(p.Path, run.WorktreePath, run.Branch)
+	}
 	if mv, err := s.store.MoveCard(card.ID, "todo", card.Position); err == nil {
 		s.hub.Publish("card", mv)
 	}

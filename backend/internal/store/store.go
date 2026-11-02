@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -17,6 +18,7 @@ type Project struct {
 	Name      string    `json:"name"`
 	Path      string    `json:"path"`
 	Color     string    `json:"color"`
+	Isolation string    `json:"isolation"` // "worktree" (git, isolated copy) | "direct" (edit the folder, shadow snapshots)
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -40,6 +42,7 @@ type Run struct {
 	SessionID    string     `json:"sessionId"`
 	Branch       string     `json:"branch"`
 	WorktreePath string     `json:"worktreePath"`
+	BaseRef      string     `json:"baseRef"` // direct mode: shadow commit taken before the run
 	Prompt       string     `json:"prompt"`
 	Error        string     `json:"error"`
 	StartedAt    *time.Time `json:"startedAt"`
@@ -66,6 +69,15 @@ func Open(path string) (*Store, error) {
 	s := &Store{db: db}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
+	}
+	// additive migrations for databases created by earlier versions
+	for _, stmt := range []string{
+		`ALTER TABLE projects ADD COLUMN isolation TEXT NOT NULL DEFAULT 'worktree'`,
+		`ALTER TABLE runs ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -118,7 +130,10 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id);
 
 // ---- projects ----
 
-func (s *Store) CreateProject(name, path, color string) (Project, error) {
+func (s *Store) CreateProject(name, path, color, isolation string) (Project, error) {
+	if isolation != "direct" {
+		isolation = "worktree"
+	}
 	if color == "" {
 		// rotate through the UI swatches so new projects are told apart at a glance
 		palette := []string{"#3355FF", "#23915F", "#D9930D", "#D2425A", "#8A4FFF", "#0F9CB8", "#E2662B"}
@@ -126,7 +141,7 @@ func (s *Store) CreateProject(name, path, color string) (Project, error) {
 		_ = s.db.QueryRow(`SELECT COUNT(*) FROM projects`).Scan(&n)
 		color = palette[n%len(palette)]
 	}
-	res, err := s.db.Exec(`INSERT INTO projects(name,path,color) VALUES(?,?,?)`, name, path, color)
+	res, err := s.db.Exec(`INSERT INTO projects(name,path,color,isolation) VALUES(?,?,?,?)`, name, path, color, isolation)
 	if err != nil {
 		return Project{}, err
 	}
@@ -136,8 +151,8 @@ func (s *Store) CreateProject(name, path, color string) (Project, error) {
 
 func (s *Store) GetProject(id int64) (Project, error) {
 	var p Project
-	err := s.db.QueryRow(`SELECT id,name,path,color,created_at FROM projects WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.Path, &p.Color, &p.CreatedAt)
+	err := s.db.QueryRow(`SELECT id,name,path,color,isolation,created_at FROM projects WHERE id=?`, id).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Color, &p.Isolation, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -145,7 +160,7 @@ func (s *Store) GetProject(id int64) (Project, error) {
 }
 
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.db.Query(`SELECT id,name,path,color,created_at FROM projects ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id,name,path,color,isolation,created_at FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +168,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Color, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Color, &p.Isolation, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -161,8 +176,11 @@ func (s *Store) ListProjects() ([]Project, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) UpdateProject(id int64, name, path, color string) (Project, error) {
-	res, err := s.db.Exec(`UPDATE projects SET name=?,path=?,color=? WHERE id=?`, name, path, color, id)
+func (s *Store) UpdateProject(id int64, name, path, color, isolation string) (Project, error) {
+	if isolation != "direct" {
+		isolation = "worktree"
+	}
+	res, err := s.db.Exec(`UPDATE projects SET name=?,path=?,color=?,isolation=? WHERE id=?`, name, path, color, isolation, id)
 	if err != nil {
 		return Project{}, err
 	}
@@ -261,11 +279,11 @@ func (s *Store) DeleteCard(id int64) error {
 
 // ---- runs ----
 
-const runSelect = `SELECT id,card_id,status,session_id,branch,worktree_path,prompt,error,started_at,finished_at,created_at FROM runs`
+const runSelect = `SELECT id,card_id,status,session_id,branch,worktree_path,base_ref,prompt,error,started_at,finished_at,created_at FROM runs`
 
 func scanRun(sc interface{ Scan(...any) error }) (Run, error) {
 	var r Run
-	err := sc.Scan(&r.ID, &r.CardID, &r.Status, &r.SessionID, &r.Branch, &r.WorktreePath, &r.Prompt, &r.Error, &r.StartedAt, &r.FinishedAt, &r.CreatedAt)
+	err := sc.Scan(&r.ID, &r.CardID, &r.Status, &r.SessionID, &r.Branch, &r.WorktreePath, &r.BaseRef, &r.Prompt, &r.Error, &r.StartedAt, &r.FinishedAt, &r.CreatedAt)
 	return r, err
 }
 
@@ -355,4 +373,9 @@ func (s *Store) ListEvents(runID int64) ([]RunEvent, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) SetRunBaseRef(id int64, ref string) error {
+	_, err := s.db.Exec(`UPDATE runs SET base_ref=? WHERE id=?`, ref, id)
+	return err
 }

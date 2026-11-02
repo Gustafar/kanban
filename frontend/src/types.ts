@@ -10,7 +10,9 @@ export const COLUMNS: { id: ColumnId; title: string; hint: string }[] = [
   { id: 'done', title: 'Concluído', hint: 'Já está no código' },
 ]
 
-export interface Project { id: number; name: string; path: string; color: string }
+export type Isolation = 'worktree' | 'direct'
+export interface Project { id: number; name: string; path: string; color: string; isolation: Isolation }
+export interface Inspection { exists: boolean; isGit: boolean; hasCommit: boolean; hasGitignore: boolean }
 export interface Card {
   id: number; projectId: number; title: string; description: string
   column: ColumnId; position: number; mode: Mode; runStatus: RunStatus | ''

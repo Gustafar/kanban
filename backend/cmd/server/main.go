@@ -48,7 +48,8 @@ func lanIPs() []string {
 	var out []string
 	addrs, _ := net.InterfaceAddrs()
 	for _, a := range addrs {
-		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+		// 169.254.x.x is an auto-assigned address from a disconnected adapter: never reachable
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() && ipn.IP.To4() != nil {
 			out = append(out, ipn.IP.String())
 		}
 	}
@@ -68,7 +69,7 @@ func main() {
 	_ = st.MarkInterruptedRuns()
 
 	token := loadToken(dir)
-	srv, _ := api.New(st, token, web.FS())
+	srv, _ := api.New(st, dir, token, web.FS())
 
 	addr := os.Getenv("KB_ADDR")
 	if addr == "" {

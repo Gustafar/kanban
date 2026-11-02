@@ -75,6 +75,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
 
   const status = run?.status
   const finished = status === 'succeeded'
+  const direct = project.isolation === 'direct'
 
   return (
     <>
@@ -100,7 +101,8 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
           <section className="run-panel" data-status={status}>
             <div className="run-head">
               <strong>{status ? STATUS_LABEL[status] : 'Ainda não executou'}</strong>
-              {run?.branch && <span className="branch"><Branch />{run.branch}</span>}
+              {direct && run && <span className="branch"><Branch />direto na pasta</span>}
+              {!direct && run?.branch && <span className="branch"><Branch />{run.branch}</span>}
             </div>
             {run?.error && <p className="run-error">{run.error}</p>}
 
@@ -111,8 +113,13 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
               </>}
               {status === 'running' && <button className="btn danger" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Parar execução</button>}
               {finished && <>
-                <button className="btn primary" disabled={busy} onClick={() => guard(() => api.merge(run!.id))}>Fazer merge na branch atual</button>
-                <button className="btn ghost" disabled={busy} onClick={() => { if (confirm('Descartar a branch e o worktree desta execução?')) guard(() => api.discard(run!.id)) }}>Descartar</button>
+                <button className="btn primary" disabled={busy} onClick={() => guard(() => api.merge(run!.id))}>{direct ? 'Aceitar mudanças' : 'Fazer merge na branch atual'}</button>
+                <button className="btn ghost" disabled={busy} onClick={() => {
+                  const msg = direct
+                    ? 'Restaurar a pasta ao estado de antes desta execução? Qualquer alteração feita na pasta depois disso, inclusive por você, também será desfeita.'
+                    : 'Descartar a branch e o worktree desta execução?'
+                  if (confirm(msg)) guard(() => api.discard(run!.id))
+                }}>{direct ? 'Desfazer na pasta' : 'Descartar'}</button>
               </>}
               {(!status || status === 'failed' || status === 'cancelled') && (
                 <button className="btn primary" disabled={busy || dirty} onClick={() => guard(() => api.runCard(card.id))}>
