@@ -135,7 +135,13 @@ func tools() []tool {
 					CreatedAt string `json:"createdAt"`
 				}
 				_ = api("GET", fmt.Sprintf("/api/cards/%d/comments", id), nil, &cs)
-				return pretty(map[string]any{"card": c, "comments": cs}), nil
+				var files []struct {
+					Name string `json:"name"`
+					Mime string `json:"mime"`
+					Path string `json:"path"`
+				}
+				_ = api("GET", fmt.Sprintf("/api/cards/%d/attachments", id), nil, &files)
+				return pretty(map[string]any{"card": c, "comments": cs, "attachments": files}), nil
 			},
 		},
 		{
@@ -145,6 +151,7 @@ func tools() []tool {
 				"title":       str("título curto"),
 				"description": str("o que deve ser feito, com contexto suficiente para outra execução"),
 				"column":      str("coluna: " + columnEnum + " (padrão backlog)"),
+				"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "até 4 tags curtas em minúsculas"},
 			}),
 			run: func(a map[string]any) (string, error) {
 				p, err := projectByRef(argStr(a, "project"))
@@ -158,9 +165,17 @@ func tools() []tool {
 				if col == "doing" {
 					return "", fmt.Errorf("só o usuário pode iniciar execuções; crie o card em backlog ou todo")
 				}
+				var tags []string
+				if raw, ok := a["tags"].([]any); ok {
+					for _, t := range raw {
+						if s, ok := t.(string); ok {
+							tags = append(tags, s)
+						}
+					}
+				}
 				var c card
-				err = api("POST", fmt.Sprintf("/api/projects/%d/cards", p.ID), map[string]string{
-					"title": argStr(a, "title"), "description": argStr(a, "description"), "column": col, "mode": "approval",
+				err = api("POST", fmt.Sprintf("/api/projects/%d/cards", p.ID), map[string]any{
+					"title": argStr(a, "title"), "description": argStr(a, "description"), "column": col, "mode": "approval", "tags": tags,
 				}, &c)
 				return fmt.Sprintf("card #%d criado em %s", c.ID, col), err
 			},

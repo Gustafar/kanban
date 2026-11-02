@@ -54,6 +54,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/cards/{id}", s.deleteCard)
 	mux.HandleFunc("POST /api/cards/{id}/run", s.runCard)
 	mux.HandleFunc("GET /api/cards/{id}/runs", s.listRuns)
+	mux.HandleFunc("POST /api/projects/{id}/quick", s.quickCard)
+	mux.HandleFunc("GET /api/cards/{id}/attachments", s.listAttachments)
+	mux.HandleFunc("POST /api/cards/{id}/attachments", s.addAttachment)
+	mux.HandleFunc("GET /api/attachments/{id}", s.serveAttachment)
+	mux.HandleFunc("DELETE /api/attachments/{id}", s.deleteAttachment)
 	mux.HandleFunc("GET /api/cards/{id}/comments", s.listComments)
 	mux.HandleFunc("POST /api/cards/{id}/comments", s.addComment)
 
@@ -289,11 +294,12 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 // ---- cards ----
 
 type cardBody struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Column      string  `json:"column"`
-	Mode        string  `json:"mode"`
-	Position    float64 `json:"position"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Column      string    `json:"column"`
+	Mode        string    `json:"mode"`
+	Position    float64   `json:"position"`
+	Tags        *[]string `json:"tags"` // nil = leave tags untouched
 }
 
 func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +340,11 @@ func (s *Server) createCard(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if b.Tags != nil {
+		if tc, err := s.store.SetCardTitleAndTags(c.ID, "", *b.Tags); err == nil {
+			c = tc
+		}
+	}
 	s.hub.Publish("card", c)
 	if c.Column == "doing" {
 		s.runner.Request(c, "")
@@ -351,6 +362,11 @@ func (s *Server) updateCard(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	if b.Tags != nil {
+		if tc, err := s.store.SetCardTitleAndTags(c.ID, "", *b.Tags); err == nil {
+			c = tc
+		}
 	}
 	s.hub.Publish("card", c)
 	writeJSON(w, 200, c)
@@ -390,6 +406,7 @@ func (s *Server) deleteCard(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	_ = os.RemoveAll(s.attachDir(id)) // path is built from the numeric id only
 	s.hub.Publish("card_deleted", map[string]int64{"id": id})
 	w.WriteHeader(204)
 }

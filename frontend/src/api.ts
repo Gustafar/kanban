@@ -1,4 +1,4 @@
-import type { Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent } from './types'
+import type { Attachment, Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent } from './types'
 
 type ProjectInput = Pick<Project, 'name' | 'path' | 'color' | 'isolation'>
 
@@ -24,7 +24,19 @@ export const api = {
   cards: (pid: number) => req<Card[]>('GET', `/projects/${pid}/cards`),
   createCard: (pid: number, c: { title: string; description: string; column: ColumnId; mode: Mode }) =>
     req<Card>('POST', `/projects/${pid}/cards`, c),
-  updateCard: (id: number, c: { title: string; description: string; mode: Mode }) => req<Card>('PUT', `/cards/${id}`, c),
+  quick: (pid: number, c: { text: string; column: ColumnId; mode: Mode }) =>
+    req<Card>('POST', `/projects/${pid}/quick`, { description: c.text, column: c.column, mode: c.mode }),
+  updateCard: (id: number, c: { title: string; description: string; mode: Mode; tags?: string[] }) => req<Card>('PUT', `/cards/${id}`, c),
+  attachments: (cardId: number) => req<Attachment[]>('GET', `/cards/${cardId}/attachments`),
+  uploadAttachment: async (cardId: number, file: File) => {
+    const res = await fetch(`/api/cards/${cardId}/attachments?name=${encodeURIComponent(file.name || 'colado.png')}`, {
+      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `Erro ${res.status}`)
+    return data as Attachment
+  },
+  deleteAttachment: (id: number) => req<void>('DELETE', `/attachments/${id}`),
   moveCard: (id: number, column: ColumnId, position: number) => req<Card>('POST', `/cards/${id}/move`, { column, position }),
   deleteCard: (id: number) => req<void>('DELETE', `/cards/${id}`),
   runCard: (id: number, message = '') => req<Run>('POST', `/cards/${id}/run`, { message }),

@@ -35,6 +35,24 @@ func New(s *store.Store, dataDir string, p Publisher) *Runner {
 	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}}
 }
 
+func (r *Runner) attachDir(cardID int64) string {
+	return filepath.Join(r.dataDir, "attachments", fmt.Sprintf("card-%d", cardID))
+}
+
+// attachmentBlock lists the card's files so the AI can open them (images and PDFs work with the Read tool).
+func (r *Runner) attachmentBlock(cardID int64) string {
+	as, err := r.store.ListAttachments(cardID)
+	if err != nil || len(as) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nAnexos deste card (arquivos locais; use a ferramenta Read para ver imagens e PDFs):\n")
+	for _, a := range as {
+		fmt.Fprintf(&b, "- %s (%s)\n", a.Path, a.Name)
+	}
+	return b.String()
+}
+
 // SetMCP lets runs talk to the board: each run gets an MCP server (`kb mcp`) bound to its own card.
 func (r *Runner) SetMCP(bin, baseURL, token string) {
 	r.mcpBin, r.baseURL, r.token = bin, baseURL, token
@@ -114,6 +132,7 @@ func (r *Runner) Request(card store.Card, message string) (store.Run, error) {
 	if message != "" {
 		prompt = message // follow-up on an existing session
 	}
+	prompt += r.attachmentBlock(card.ID)
 	status := "awaiting_approval"
 	if card.Mode == "auto" {
 		status = "running"
@@ -255,6 +274,9 @@ func (r *Runner) execute(runID int64) {
 	}
 	args := []string{"-p", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "acceptEdits", "--allowedTools", allowed}
+	if _, err := os.Stat(r.attachDir(card.ID)); err == nil {
+		args = append(args, "--add-dir", r.attachDir(card.ID)) // lets the Read tool open files outside the worktree
+	}
 	if mcpCfg != "" {
 		args = append(args, "--mcp-config", mcpCfg)
 	}

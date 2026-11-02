@@ -34,6 +34,39 @@ type Card struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 	RunStatus   string    `json:"runStatus"` // status of latest run, "" if none
 	Comments    int       `json:"commentCount"`
+	Tags        []string  `json:"tags"`
+	Attachments int       `json:"attachmentCount"`
+}
+
+type Attachment struct {
+	ID        int64     `json:"id"`
+	CardID    int64     `json:"cardId"`
+	Name      string    `json:"name"`
+	Mime      string    `json:"mime"`
+	Size      int64     `json:"size"`
+	Path      string    `json:"path"` // absolute path on disk, handed to the AI so it can read the file
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// NormalizeTags lowercases, strips '#', ',' and spaces at the edges, drops empties/duplicates and caps the list.
+func NormalizeTags(in []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range in {
+		t = strings.ToLower(strings.Trim(strings.TrimSpace(strings.ReplaceAll(t, ",", " ")), "# "))
+		if r := []rune(t); len(r) > 24 {
+			t = string(r[:24])
+		}
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+		if len(out) == 6 {
+			break
+		}
+	}
+	return out
 }
 
 type Comment struct {
@@ -83,6 +116,7 @@ func Open(path string) (*Store, error) {
 	for _, stmt := range []string{
 		`ALTER TABLE projects ADD COLUMN isolation TEXT NOT NULL DEFAULT 'worktree'`,
 		`ALTER TABLE runs ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cards ADD COLUMN tags TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, err
@@ -139,6 +173,16 @@ CREATE TABLE IF NOT EXISTS comments (
 	body TEXT NOT NULL,
 	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS attachments (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	mime TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	path TEXT NOT NULL,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_card ON attachments(card_id);
 CREATE INDEX IF NOT EXISTS idx_comments_card ON comments(card_id);
 CREATE INDEX IF NOT EXISTS idx_cards_project ON cards(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_card ON runs(card_id);
@@ -216,12 +260,19 @@ func (s *Store) DeleteProject(id int64) error {
 
 const cardSelect = `SELECT c.id,c.project_id,c.title,c.description,c.col,c.position,c.mode,c.created_at,c.updated_at,
 	COALESCE((SELECT status FROM runs r WHERE r.card_id=c.id ORDER BY r.id DESC LIMIT 1),''),
-	(SELECT COUNT(*) FROM comments m WHERE m.card_id=c.id)
+	(SELECT COUNT(*) FROM comments m WHERE m.card_id=c.id),
+	c.tags,
+	(SELECT COUNT(*) FROM attachments a WHERE a.card_id=c.id)
 	FROM cards c`
 
 func scanCard(sc interface{ Scan(...any) error }) (Card, error) {
 	var c Card
-	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus, &c.Comments)
+	var tags string
+	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus, &c.Comments, &tags, &c.Attachments)
+	c.Tags = []string{}
+	if tags != "" {
+		c.Tags = strings.Split(tags, ",")
+	}
 	return c, err
 }
 
@@ -275,6 +326,15 @@ func (s *Store) UpdateCard(id int64, title, description, mode string) (Card, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Card{}, ErrNotFound
+	}
+	return s.GetCard(id)
+}
+
+func (s *Store) SetCardTitleAndTags(id int64, title string, tags []string) (Card, error) {
+	_, err := s.db.Exec(`UPDATE cards SET title=COALESCE(NULLIF(?,''),title),tags=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		title, strings.Join(NormalizeTags(tags), ","), id)
+	if err != nil {
+		return Card{}, err
 	}
 	return s.GetCard(id)
 }
@@ -391,6 +451,47 @@ func (s *Store) ListEvents(runID int64) ([]RunEvent, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) AddAttachment(cardID int64, name, mime string, size int64, path string) (Attachment, error) {
+	res, err := s.db.Exec(`INSERT INTO attachments(card_id,name,mime,size,path) VALUES(?,?,?,?,?)`, cardID, name, mime, size, path)
+	if err != nil {
+		return Attachment{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetAttachment(id)
+}
+
+func (s *Store) GetAttachment(id int64) (Attachment, error) {
+	var a Attachment
+	err := s.db.QueryRow(`SELECT id,card_id,name,mime,size,path,created_at FROM attachments WHERE id=?`, id).
+		Scan(&a.ID, &a.CardID, &a.Name, &a.Mime, &a.Size, &a.Path, &a.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	return a, err
+}
+
+func (s *Store) ListAttachments(cardID int64) ([]Attachment, error) {
+	rows, err := s.db.Query(`SELECT id,card_id,name,mime,size,path,created_at FROM attachments WHERE card_id=? ORDER BY id`, cardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Attachment{}
+	for rows.Next() {
+		var a Attachment
+		if err := rows.Scan(&a.ID, &a.CardID, &a.Name, &a.Mime, &a.Size, &a.Path, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteAttachment(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM attachments WHERE id=?`, id)
+	return err
 }
 
 func (s *Store) AddComment(cardID int64, author, body string) (Comment, error) {

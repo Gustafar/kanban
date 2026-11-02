@@ -16,7 +16,10 @@ export interface Inspection { exists: boolean; isGit: boolean; hasCommit: boolea
 export interface Card {
   id: number; projectId: number; title: string; description: string
   column: ColumnId; position: number; mode: Mode; runStatus: RunStatus | ''; commentCount: number
+  tags: string[]; attachmentCount: number
 }
+export interface Attachment { id: number; cardId: number; name: string; mime: string; size: number; createdAt: string }
+export const isImage = (mime: string) => /^image\/(png|jpeg|gif|webp)/.test(mime)
 export interface Comment { id: number; cardId: number; author: 'user' | 'ai'; body: string; createdAt: string }
 export interface Run {
   id: number; cardId: number; status: RunStatus; sessionId: string

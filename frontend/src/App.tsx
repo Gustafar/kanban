@@ -6,6 +6,7 @@ import { Board } from './components/Board'
 import { CardDrawer } from './components/CardDrawer'
 import { Modal, NewCardDialog, ProjectDialog } from './components/Dialogs'
 import { Bell, Gear, Plus, Search } from './components/Icons'
+import { QuickBar } from './components/QuickBar'
 import type { Card } from './types'
 
 type Dialog = { kind: 'card'; column: ColumnId } | { kind: 'project'; edit: boolean } | { kind: 'help' } | null
@@ -22,7 +23,7 @@ const matchesFilter = (c: Card, f: Filter) =>
   (f === 'running' ? c.runStatus === 'running' : c.runStatus === 'awaiting_approval' || c.runStatus === 'failed' || c.column === 'review')
 
 const SHORTCUTS: [string, string][] = [
-  ['n', 'Novo card'], ['/', 'Buscar'], ['1 – 9', 'Trocar de projeto'], ['Esc', 'Fechar card ou limpar busca'], ['?', 'Mostrar atalhos'],
+  ['n', 'Escrever uma tarefa (barra de baixo)'], ['Enter', 'Criar o card na barra (Shift+Enter quebra a linha)'], ['/', 'Buscar'], ['1 – 9', 'Trocar de projeto'], ['Esc', 'Fechar card ou limpar busca'], ['?', 'Mostrar atalhos'],
 ]
 
 const canNotify = typeof Notification !== 'undefined' && window.isSecureContext
@@ -36,13 +37,16 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const searchRef = useRef<HTMLInputElement>(null)
+  const quickRef = useRef<HTMLTextAreaElement>(null)
 
   const project = b.projects.find(p => p.id === b.projectId)
   const card = b.cards.find(c => c.id === openCard)
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return b.cards.filter(c => matchesFilter(c, filter) && (!q || c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)))
+    const bare = q.replace(/^#/, '')
+    return b.cards.filter(c => matchesFilter(c, filter) && (!q ||
+      c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || c.tags.some(t => t.includes(bare))))
   }, [b.cards, query, filter])
   const attention = useMemo(() => b.cards.filter(c => matchesFilter(c, 'attention')).length, [b.cards])
   const filtering = filter !== 'all' || query.trim() !== ''
@@ -55,7 +59,7 @@ export default function App() {
       const t = e.target as HTMLElement | null
       if (t?.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus() }
-      else if (e.key === 'n' && project) { e.preventDefault(); setDialog({ kind: 'card', column: 'backlog' }) }
+      else if (e.key === 'n' && project) { e.preventDefault(); quickRef.current?.focus() }
       else if (e.key === '?') setDialog({ kind: 'help' })
       else if (/^[1-9]$/.test(e.key) && projects[+e.key - 1]) { setProjectId(projects[+e.key - 1].id); setOpenCard(null) }
     }
@@ -137,6 +141,7 @@ export default function App() {
             </div>
             {filtering && visible.length === 0 && <p className="no-results">Nenhum card combina com a busca ou o filtro.</p>}
             <Board cards={visible} live={b.live} onMove={move} onOpen={setOpenCard} onAdd={column => setDialog({ kind: 'card', column })} />
+            <QuickBar key={project.id} ref={quickRef} project={project} onError={onError} />
           </>
         ) : (
           <div className="empty">

@@ -33,6 +33,13 @@ Ao criar o projeto o app detecta o modo pela pasta, e o diálogo oferece "Inicia
 - "Pedir ajuste" continua a mesma sessão do Claude (`--resume`).
 - Avisos: toast do Windows (servidor) e notificação do navegador (só em localhost/HTTPS).
 
+## Barra de captura, tags e anexos
+
+- A barra no centro inferior cria o card a partir de texto livre: o card aparece na hora com um título provisório e, em alguns segundos, a IA (Haiku, via seu `claude`) troca pelo título final e adiciona tags. O texto que você escreveu vira a descrição, que é o pedido para a IA executar. `Enter` cria, `Shift+Enter` quebra a linha, `n` foca a barra.
+- Cole um print (Ctrl+V), arraste arquivos ou use o clipe, na barra ou na gaveta do card. Limite de 15 MB por arquivo. Ficam em `%APPDATA%\kanban-board\attachments\`.
+- A IA recebe o caminho dos anexos no pedido e lê imagens e PDFs com a ferramenta Read (o MCP `get_card` também lista os anexos).
+- Tags: editáveis na gaveta, e a busca encontra por tag (`#bug`).
+
 ## Comentários, busca e atalhos
 
 - Cada card tem comentários (aba na gaveta). "Pedir ajuste" vira um comentário seu, o resumo final da IA vira um comentário dela, e a IA também escreve e lê comentários pelo MCP (`add_note`, `get_card`).

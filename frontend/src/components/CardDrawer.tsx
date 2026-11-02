@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { BoardListener } from '../useBoard'
-import type { Card, Comment, Mode, Project, Run, RunEvent } from '../types'
+import { isImage } from '../types'
+import type { Attachment, Card, Comment, Mode, Project, Run, RunEvent } from '../types'
 import { STATUS_LABEL } from './CardView'
-import { Branch, Close } from './Icons'
+import { Branch, Clip, Close } from './Icons'
 import { ModeToggle } from './Dialogs'
 
 interface Props {
@@ -31,6 +32,9 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   const [title, setTitle] = useState(card.title)
   const [description, setDescription] = useState(card.description)
   const [mode, setMode] = useState<Mode>(card.mode)
+  const [tagsText, setTagsText] = useState(card.tags.join(', '))
+  const [files, setFiles] = useState<Attachment[]>([])
+  const fileInput = useRef<HTMLInputElement>(null)
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<RunEvent[]>([])
   const [tab, setTab] = useState<'log' | 'diff' | 'comments'>('log')
@@ -43,7 +47,15 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
 
   const run = runs[0] // newest first
   const runId = run?.id
-  const dirty = title !== card.title || description !== card.description || mode !== card.mode
+  const tagList = tagsText.split(',').map(t => t.trim()).filter(Boolean)
+  const dirty = title !== card.title || description !== card.description || mode !== card.mode || tagList.join(', ') !== card.tags.join(', ')
+
+  async function upload(list: File[]) {
+    for (const f of list) {
+      if (f.size > 15 * 1024 * 1024) { onError(`"${f.name}" passa de 15 MB.`); continue }
+      try { await api.uploadAttachment(card.id, f) } catch (e) { onError((e as Error).message) }
+    }
+  }
 
   const guard = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true)
@@ -52,6 +64,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
 
   useEffect(() => { api.runs(card.id).then(setRuns).catch(e => onError(e.message)) }, [card.id, onError])
   useEffect(() => { api.comments(card.id).then(setComments).catch(() => {}) }, [card.id])
+  useEffect(() => { api.attachments(card.id).then(setFiles).catch(() => {}) }, [card.id])
   useEffect(() => {
     setEvents([])
     if (runId != null) api.events(runId).then(setEvents).catch(() => {})
@@ -61,6 +74,8 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
     if (type === 'run' && data.cardId === card.id) {
       setRuns(l => (l.some(r => r.id === data.id) ? l.map(r => (r.id === data.id ? data : r)) : [data, ...l]))
     }
+    if (type === 'attachment' && data.cardId === card.id) setFiles(l => (l.some(a => a.id === data.id) ? l : [...l, data]))
+    if (type === 'attachment_deleted' && data.cardId === card.id) setFiles(l => l.filter(a => a.id !== data.id))
     if (type === 'comment' && data.cardId === card.id) setComments(l => (l.some(c => c.id === data.id) ? l : [...l, data]))
     if (type === 'run_event' && data.runId === runId) setEvents(l => (l.some(e => e.id === data.id) ? l : [...l, data]))
   }), [subscribe, card.id, runId])
@@ -84,7 +99,10 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <aside className="drawer" aria-label={`Card: ${card.title}`}>
+      <aside
+        className="drawer" aria-label={`Card: ${card.title}`}
+        onPaste={e => { const pasted = [...e.clipboardData.files]; if (pasted.length) { e.preventDefault(); void upload(pasted) } }}
+      >
         <header className="drawer-head">
           <span className="dot" style={{ background: project.color }} />
           <span className="drawer-project">{project.name}</span>
@@ -92,13 +110,43 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
         </header>
 
         <div className="drawer-scroll">
-          <input className="title-input" value={title} onChange={e => setTitle(e.target.value)} aria-label="Título" />
+          <textarea
+            className="title-input" rows={2} value={title} onChange={e => setTitle(e.target.value.replace(/\n/g, ' '))} aria-label="Título"
+            onKeyDown={e => { if (e.key === 'Enter') e.preventDefault() }}
+          />
           <textarea className="desc-input" rows={4} value={description} onChange={e => setDescription(e.target.value)} placeholder="Descreva o que a IA deve fazer." aria-label="Descrição" />
+          <label className="field">Tags
+            <input className="tags-input" value={tagsText} onChange={e => setTagsText(e.target.value)} placeholder="bug, frontend, relatórios" />
+          </label>
+
+          <section className="attachments" aria-label="Anexos">
+            <div className="attachments-head">
+              <strong>Anexos</strong>
+              <button className="btn ghost" onClick={() => fileInput.current?.click()}><Clip />Anexar</button>
+              <input ref={fileInput} type="file" multiple hidden onChange={e => { void upload([...(e.target.files ?? [])]); e.target.value = '' }} />
+            </div>
+            {files.length === 0
+              ? <p className="muted attachments-empty">Cole um print aqui (Ctrl+V) ou use Anexar. A IA consegue ver imagens e PDFs.</p>
+              : (
+                <ul className="attachment-grid">
+                  {files.map(a => (
+                    <li key={a.id}>
+                      <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" title={a.name}>
+                        {isImage(a.mime) ? <img src={`/api/attachments/${a.id}`} alt={a.name} loading="lazy" /> : <span className="file-ext">{(a.name.split('.').pop() || 'arq').slice(0, 4)}</span>}
+                        <span className="attachment-name">{a.name}</span>
+                      </a>
+                      <button onClick={() => { if (confirm(`Remover "${a.name}"?`)) guard(() => api.deleteAttachment(a.id)) }} aria-label={`Remover ${a.name}`}><Close /></button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+          </section>
+
           <div className="field">Execução<ModeToggle value={mode} onChange={setMode} /></div>
           {dirty && (
             <div className="actions">
-              <button className="btn ghost" onClick={() => { setTitle(card.title); setDescription(card.description); setMode(card.mode) }}>Desfazer</button>
-              <button className="btn primary" disabled={busy || !title.trim()} onClick={() => guard(() => api.updateCard(card.id, { title, description, mode }))}>Salvar</button>
+              <button className="btn ghost" onClick={() => { setTitle(card.title); setDescription(card.description); setMode(card.mode); setTagsText(card.tags.join(', ')) }}>Desfazer</button>
+              <button className="btn primary" disabled={busy || !title.trim()} onClick={() => guard(() => api.updateCard(card.id, { title, description, mode, tags: tagList }))}>Salvar</button>
             </div>
           )}
 
