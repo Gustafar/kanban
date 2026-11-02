@@ -1,0 +1,358 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+var ErrNotFound = errors.New("not found")
+
+var Columns = []string{"backlog", "todo", "doing", "review", "done"}
+
+type Project struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	Color     string    `json:"color"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type Card struct {
+	ID          int64     `json:"id"`
+	ProjectID   int64     `json:"projectId"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Column      string    `json:"column"`
+	Position    float64   `json:"position"`
+	Mode        string    `json:"mode"` // "approval" | "auto"
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	RunStatus   string    `json:"runStatus"` // status of latest run, "" if none
+}
+
+type Run struct {
+	ID           int64      `json:"id"`
+	CardID       int64      `json:"cardId"`
+	Status       string     `json:"status"` // awaiting_approval | running | succeeded | failed | cancelled
+	SessionID    string     `json:"sessionId"`
+	Branch       string     `json:"branch"`
+	WorktreePath string     `json:"worktreePath"`
+	Prompt       string     `json:"prompt"`
+	Error        string     `json:"error"`
+	StartedAt    *time.Time `json:"startedAt"`
+	FinishedAt   *time.Time `json:"finishedAt"`
+	CreatedAt    time.Time  `json:"createdAt"`
+}
+
+type RunEvent struct {
+	ID        int64     `json:"id"`
+	RunID     int64     `json:"runId"`
+	Kind      string    `json:"kind"` // text | tool | result | error | system
+	Data      string    `json:"data"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type Store struct{ db *sql.DB }
+
+func Open(path string) (*Store, error) {
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	s := &Store{db: db}
+	if _, err := db.Exec(schema); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) Close() error { return s.db.Close() }
+
+const schema = `
+CREATE TABLE IF NOT EXISTS projects (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	path TEXT NOT NULL,
+	color TEXT NOT NULL DEFAULT '#6366f1',
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS cards (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+	title TEXT NOT NULL,
+	description TEXT NOT NULL DEFAULT '',
+	col TEXT NOT NULL DEFAULT 'backlog',
+	position REAL NOT NULL DEFAULT 0,
+	mode TEXT NOT NULL DEFAULT 'approval',
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS runs (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+	status TEXT NOT NULL,
+	session_id TEXT NOT NULL DEFAULT '',
+	branch TEXT NOT NULL DEFAULT '',
+	worktree_path TEXT NOT NULL DEFAULT '',
+	prompt TEXT NOT NULL DEFAULT '',
+	error TEXT NOT NULL DEFAULT '',
+	started_at DATETIME,
+	finished_at DATETIME,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS run_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL,
+	data TEXT NOT NULL,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_cards_project ON cards(project_id);
+CREATE INDEX IF NOT EXISTS idx_runs_card ON runs(card_id);
+CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id);
+`
+
+// ---- projects ----
+
+func (s *Store) CreateProject(name, path, color string) (Project, error) {
+	if color == "" {
+		// rotate through the UI swatches so new projects are told apart at a glance
+		palette := []string{"#3355FF", "#23915F", "#D9930D", "#D2425A", "#8A4FFF", "#0F9CB8", "#E2662B"}
+		var n int
+		_ = s.db.QueryRow(`SELECT COUNT(*) FROM projects`).Scan(&n)
+		color = palette[n%len(palette)]
+	}
+	res, err := s.db.Exec(`INSERT INTO projects(name,path,color) VALUES(?,?,?)`, name, path, color)
+	if err != nil {
+		return Project{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetProject(id)
+}
+
+func (s *Store) GetProject(id int64) (Project, error) {
+	var p Project
+	err := s.db.QueryRow(`SELECT id,name,path,color,created_at FROM projects WHERE id=?`, id).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Color, &p.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, ErrNotFound
+	}
+	return p, err
+}
+
+func (s *Store) ListProjects() ([]Project, error) {
+	rows, err := s.db.Query(`SELECT id,name,path,color,created_at FROM projects ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Project{}
+	for rows.Next() {
+		var p Project
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Color, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateProject(id int64, name, path, color string) (Project, error) {
+	res, err := s.db.Exec(`UPDATE projects SET name=?,path=?,color=? WHERE id=?`, name, path, color, id)
+	if err != nil {
+		return Project{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Project{}, ErrNotFound
+	}
+	return s.GetProject(id)
+}
+
+func (s *Store) DeleteProject(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM projects WHERE id=?`, id)
+	return err
+}
+
+// ---- cards ----
+
+const cardSelect = `SELECT c.id,c.project_id,c.title,c.description,c.col,c.position,c.mode,c.created_at,c.updated_at,
+	COALESCE((SELECT status FROM runs r WHERE r.card_id=c.id ORDER BY r.id DESC LIMIT 1),'')
+	FROM cards c`
+
+func scanCard(sc interface{ Scan(...any) error }) (Card, error) {
+	var c Card
+	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus)
+	return c, err
+}
+
+func (s *Store) CreateCard(projectID int64, title, description, column, mode string) (Card, error) {
+	if column == "" {
+		column = "backlog"
+	}
+	if mode == "" {
+		mode = "approval"
+	}
+	var maxPos sql.NullFloat64
+	_ = s.db.QueryRow(`SELECT MAX(position) FROM cards WHERE project_id=? AND col=?`, projectID, column).Scan(&maxPos)
+	res, err := s.db.Exec(`INSERT INTO cards(project_id,title,description,col,position,mode) VALUES(?,?,?,?,?,?)`,
+		projectID, title, description, column, maxPos.Float64+1024, mode)
+	if err != nil {
+		return Card{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetCard(id)
+}
+
+func (s *Store) GetCard(id int64) (Card, error) {
+	c, err := scanCard(s.db.QueryRow(cardSelect+` WHERE c.id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
+func (s *Store) ListCards(projectID int64) ([]Card, error) {
+	rows, err := s.db.Query(cardSelect+` WHERE c.project_id=? ORDER BY c.position`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Card{}
+	for rows.Next() {
+		c, err := scanCard(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateCard(id int64, title, description, mode string) (Card, error) {
+	res, err := s.db.Exec(`UPDATE cards SET title=?,description=?,mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, title, description, mode, id)
+	if err != nil {
+		return Card{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Card{}, ErrNotFound
+	}
+	return s.GetCard(id)
+}
+
+func (s *Store) MoveCard(id int64, column string, position float64) (Card, error) {
+	res, err := s.db.Exec(`UPDATE cards SET col=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, column, position, id)
+	if err != nil {
+		return Card{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Card{}, ErrNotFound
+	}
+	return s.GetCard(id)
+}
+
+func (s *Store) DeleteCard(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM cards WHERE id=?`, id)
+	return err
+}
+
+// ---- runs ----
+
+const runSelect = `SELECT id,card_id,status,session_id,branch,worktree_path,prompt,error,started_at,finished_at,created_at FROM runs`
+
+func scanRun(sc interface{ Scan(...any) error }) (Run, error) {
+	var r Run
+	err := sc.Scan(&r.ID, &r.CardID, &r.Status, &r.SessionID, &r.Branch, &r.WorktreePath, &r.Prompt, &r.Error, &r.StartedAt, &r.FinishedAt, &r.CreatedAt)
+	return r, err
+}
+
+func (s *Store) CreateRun(cardID int64, status, prompt string) (Run, error) {
+	res, err := s.db.Exec(`INSERT INTO runs(card_id,status,prompt) VALUES(?,?,?)`, cardID, status, prompt)
+	if err != nil {
+		return Run{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetRun(id)
+}
+
+func (s *Store) GetRun(id int64) (Run, error) {
+	r, err := scanRun(s.db.QueryRow(runSelect+` WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+func (s *Store) LatestRun(cardID int64) (Run, error) {
+	r, err := scanRun(s.db.QueryRow(runSelect+` WHERE card_id=? ORDER BY id DESC LIMIT 1`, cardID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+func (s *Store) ListRuns(cardID int64) ([]Run, error) {
+	rows, err := s.db.Query(runSelect+` WHERE card_id=? ORDER BY id DESC`, cardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Run{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UpdateRun applies a partial update; zero-valued strings are left untouched.
+func (s *Store) UpdateRun(id int64, status, sessionID, branch, worktree, errMsg string, started, finished *time.Time) error {
+	_, err := s.db.Exec(`UPDATE runs SET
+		status=COALESCE(NULLIF(?,''),status),
+		session_id=COALESCE(NULLIF(?,''),session_id),
+		branch=COALESCE(NULLIF(?,''),branch),
+		worktree_path=COALESCE(NULLIF(?,''),worktree_path),
+		error=COALESCE(NULLIF(?,''),error),
+		started_at=COALESCE(?,started_at),
+		finished_at=COALESCE(?,finished_at)
+		WHERE id=?`, status, sessionID, branch, worktree, errMsg, started, finished, id)
+	return err
+}
+
+// MarkInterruptedRuns flags runs left "running" by a previous server process.
+func (s *Store) MarkInterruptedRuns() error {
+	_, err := s.db.Exec(`UPDATE runs SET status='failed',error='servidor reiniciado durante a execução',finished_at=CURRENT_TIMESTAMP WHERE status='running'`)
+	return err
+}
+
+func (s *Store) AddEvent(runID int64, kind, data string) (RunEvent, error) {
+	res, err := s.db.Exec(`INSERT INTO run_events(run_id,kind,data) VALUES(?,?,?)`, runID, kind, data)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	id, _ := res.LastInsertId()
+	return RunEvent{ID: id, RunID: runID, Kind: kind, Data: data, CreatedAt: time.Now()}, nil
+}
+
+func (s *Store) ListEvents(runID int64) ([]RunEvent, error) {
+	rows, err := s.db.Query(`SELECT id,run_id,kind,data,created_at FROM run_events WHERE run_id=? ORDER BY id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RunEvent{}
+	for rows.Next() {
+		var e RunEvent
+		if err := rows.Scan(&e.ID, &e.RunID, &e.Kind, &e.Data, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

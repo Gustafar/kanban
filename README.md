@@ -1,0 +1,35 @@
+# Kanban + Claude
+
+Kanban pessoal e local. Cada projeto aponta para um repositório git; ao mover um card para **Em execução**, o Claude Code (seu login, via CLI `claude`) trabalha num git worktree isolado e o card vai para **Revisão** quando termina.
+
+## Rodar
+
+```powershell
+.\start.ps1
+```
+
+Abra a URL `local:` ou `rede:` impressa no terminal (traz `?token=...`, que vira cookie). O token fica em `%APPDATA%\kanban-board\token`.
+
+## Fluxo
+
+- Card **Com aprovação**: ao entrar em execução fica "Aguardando sua aprovação" até você aprovar. **Automático**: roda sozinho.
+- Cada execução cria a branch `kb/card-<id>-<slug>` em `<pasta-do-projeto>\..\.kanban-worktrees\`. Na revisão você vê o diff, faz merge ou descarta.
+- "Pedir ajuste" continua a mesma sessão do Claude (`--resume`).
+- Avisos: toast do Windows (servidor) e notificação do navegador (só em localhost/HTTPS).
+
+## CLI
+
+`backend\bin\kb.exe` (ver `kb` sem argumentos): `projects`, `project-add`, `ls`, `add`, `move`, `run`, `approve`, `cancel`, `logs`, `diff`, `merge`.
+
+## Config (env)
+
+| Var | Padrão |
+|---|---|
+| `KB_ADDR` | `:7777` |
+| `KB_DATA` | `%APPDATA%\kanban-board` |
+| `KB_TOKEN` | gerado e salvo no 1º start |
+| `KB_ALLOWED_TOOLS` | `Bash,Edit,Write,Read,Glob,Grep` (ferramentas liberadas para o Claude nos worktrees) |
+
+## Desenvolvimento
+
+Backend: `cd backend && go run ./cmd/server`. Frontend com hot reload: `cd frontend && npm run dev` (proxy de `/api` para `:7777`; abra o backend uma vez com `?token=` para ganhar o cookie).
