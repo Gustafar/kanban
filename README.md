@@ -1,65 +1,88 @@
 # Kanban + Claude
 
-Kanban pessoal e local. Cada projeto aponta para um repositório git; ao mover um card para **Em execução**, o Claude Code (seu login, via CLI `claude`) trabalha num git worktree isolado e o card vai para **Revisão** quando termina.
+A personal, local kanban board where Claude Code does the work. You write a task, move the card to **In progress**, and the AI works in an isolated git worktree without touching your branch. When it finishes, the card moves to **Review**: you see the diff, ask for tweaks in the same session, then merge or discard.
 
-## Instalar (recomendado)
+**Highlights**
+
+- Isolated runs per card (git worktree), or directly in the folder with a snapshot and "undo" for projects without git.
+- Queue with a parallel-run limit; manual approval or automatic start per card.
+- Capture bar: free text becomes a card, and the AI writes the title and tags.
+- Model and effort per card, with a plan-usage meter.
+- MCP server and CLI (`cardume`): the AI and you can use the board from any folder.
+- Runs in the background on Windows, uses your Claude login (no API key), and can update itself from a card.
+
+**Stack:** Go (SQLite, no CGO) backend; React, TypeScript and Vite frontend.
+
+> The app interface is in Portuguese (pt-BR). Labels quoted below are shown in English for readability.
+
+Each project points to a local git repository; when you move a card to **In progress**, Claude Code (your login, via the `claude` CLI) works in an isolated git worktree and the card goes to **Review** when it is done.
+
+## Install (recommended)
 
 ```powershell
-.\install.ps1     # compila, sobe com o Windows (sem janela), cria o atalho "Kanban"
-.\uninstall.ps1   # remove a inicialização e os atalhos (os dados ficam)
+.\install.ps1     # builds, starts with Windows (no window), creates the "Kanban" shortcut
+.\uninstall.ps1   # removes the startup entry and shortcuts (your data stays)
 ```
 
-Depois disso nada precisa ficar aberto: o servidor roda em segundo plano, o log fica em `%APPDATA%\kanban-board\server.log` e `cardume` (em qualquer pasta, num terminal novo) abre o board já no projeto daquela pasta, criando o projeto se ele ainda não existir; `cardume <caminho>` faz o mesmo para outra pasta. Depois de mudar o código, rode `.\install.ps1` de novo.
+After that nothing needs to stay open: the server runs in the background, the log is at `%APPDATA%\kanban-board\server.log`, and `cardume` (in any folder, in a new terminal) opens the board on that folder's project, creating the project if it does not exist yet; `cardume <path>` does the same for another folder. After changing the code, run `.\install.ps1` again.
 
-## Rodar só uma vez (com terminal)
+## Run once (with a terminal)
 
 ```powershell
 .\start.ps1
 ```
 
-Abra a URL `local:` ou `rede:` impressa no terminal (traz `?token=...`, que vira cookie). O token fica em `%APPDATA%\kanban-board\token`.
+Open the `local:` or `rede:` URL printed in the terminal (it carries `?token=...`, which becomes a cookie). The token is stored in `%APPDATA%\kanban-board\token`.
 
-## Dois modos por projeto
+## Two modes per project
 
-- **Cópia isolada (git)**: a pasta precisa ser um repositório git local com um commit (sem GitHub). A IA trabalha num worktree em outra branch; você revisa o diff e faz merge.
-- **Direto na pasta**: serve para pastas sem git. A IA edita a pasta; antes de cada execução o app salva um snapshot num git "sombra" em `%APPDATA%\kanban-board\shadow\` (o projeto não ganha `.git`). Dá para ver o diff e "Desfazer na pasta". Só uma execução por vez edita a mesma pasta.
+- **Isolated copy (git)**: the folder must be a local git repository with at least one commit (no GitHub needed). The AI works in a worktree on another branch; you review the diff and merge.
+- **Directly in the folder**: for folders without git. The AI edits the folder; before each run the app saves a snapshot in a "shadow" git at `%APPDATA%\kanban-board\shadow\` (the project does not get a `.git`). You can see the diff and "Undo in folder". Only one run at a time edits the same folder.
 
-Ao criar o projeto o app detecta o modo pela pasta, e o diálogo oferece "Iniciar git nesta pasta".
+When you create a project the app detects the mode from the folder, and the dialog offers "Start git in this folder".
 
-## Fluxo
+## Flow
 
-- Card **Com aprovação**: ao entrar em execução fica "Aguardando sua aprovação" até você aprovar. **Automático**: roda sozinho.
-- Cada execução cria a branch `kb/card-<id>-<slug>` em `<pasta-do-projeto>\..\.kanban-worktrees\`. Na revisão você vê o diff, faz merge ou descarta.
-- "Pedir ajuste" continua a mesma sessão do Claude (`--resume`).
-- Avisos: toast do Windows (servidor) e notificação do navegador (só em localhost/HTTPS).
+- **With approval** card: when it enters execution it stays "Awaiting your approval" until you approve. **Automatic**: runs on its own.
+- Each run creates the branch `kb/card-<id>-<slug>` in `<project-folder>\..\.kanban-worktrees\`. In review you see the diff and merge or discard.
+- "Ask for changes" continues the same Claude session (`--resume`).
+- Notifications: Windows toast (from the server) and browser notification (localhost/HTTPS only).
 
-## Limite de execuções em paralelo
+## Parallel run limit
 
-No máximo N execuções da IA rodam ao mesmo tempo (padrão 2); as demais ficam **na fila** e começam na ordem de chegada quando uma vaga abre. Dá para tirar um card da fila na gaveta. O limite (1 a 8) é ajustado com o − / + no rodapé da barra lateral e fica salvo; `KB_MAX_PARALLEL` define o valor inicial. Em projetos "direto na pasta" (sem git) só uma execução edita a pasta por vez, para não se atrapalharem: as outras esperam na fila (sem ocupar uma vaga) e começam sozinhas. Projetos com git isolam cada execução num worktree e rodam em paralelo de verdade. A fila vive na memória: se o servidor reiniciar, execuções em andamento ou na fila são marcadas como falhas.
+At most N AI runs go at the same time (default 2); the rest are **queued** and start in arrival order when a slot opens. You can take a card out of the queue in the drawer. The limit (1 to 8) is set with the − / + in the sidebar footer and is saved; `KB_MAX_PARALLEL` sets the initial value. In "directly in the folder" projects (no git) only one run edits the folder at a time, so they do not step on each other: the others wait in the queue (without using a slot) and start on their own. Git projects isolate each run in a worktree and run truly in parallel. The queue lives in memory: if the server restarts, runs in progress or queued are marked as failed.
 
-## Barra de captura, tags e anexos
+## Capture bar, tags and attachments
 
-- A barra no centro inferior cria o card a partir de texto livre: o card aparece na hora com um título provisório e, em alguns segundos, a IA (Haiku, via seu `claude`) troca pelo título final e adiciona tags. O texto que você escreveu vira a descrição, que é o pedido para a IA executar. `Enter` cria, `Shift+Enter` quebra a linha, `n` foca a barra.
-- Cole um print (Ctrl+V), arraste arquivos ou use o clipe, na barra ou na gaveta do card. Limite de 15 MB por arquivo. Ficam em `%APPDATA%\kanban-board\attachments\`.
-- A IA recebe o caminho dos anexos no pedido e lê imagens e PDFs com a ferramenta Read (o MCP `get_card` também lista os anexos).
-- Tags: editáveis na gaveta, e a busca encontra por tag (`#bug`).
+- The bar at the bottom center creates a card from free text: the card appears instantly with a provisional title and, within a few seconds, the AI (Haiku, via your `claude`) replaces it with the final title and adds tags. The text you wrote becomes the description, which is the request sent to the AI. `Enter` creates, `Shift+Enter` breaks the line, `n` focuses the bar.
+- Paste a screenshot (Ctrl+V), drag files, or use the paperclip, in the bar or in the card drawer. 15 MB limit per file. They are stored in `%APPDATA%\kanban-board\attachments\`.
+- The AI receives the attachment paths in the request and reads images and PDFs with the Read tool (the MCP `get_card` also lists attachments).
+- Tags: editable in the drawer, and search finds by tag (`#bug`).
 
-## Comentários, busca e atalhos
+## Comments, search and shortcuts
 
-- Cada card tem comentários (aba na gaveta). "Pedir ajuste" vira um comentário seu, o resumo final da IA vira um comentário dela, e a IA também escreve e lê comentários pelo MCP (`add_note`, `get_card`).
-- Busca por título e descrição, e filtros "Precisa de mim" (aguardando aprovação, com falha ou em revisão) e "IA trabalhando".
-- Atalhos: `n` novo card, `/` buscar, `1`–`9` trocar de projeto, `Esc` fechar, `?` ajuda.
+- Each card has comments (tab in the drawer). "Ask for changes" becomes a comment from you, the AI's final summary becomes a comment from it, and the AI also writes and reads comments through MCP (`add_note`, `get_card`).
+- Search by title and description, and the filters "Needs me" (awaiting approval, failed or in review) and "AI working".
+- Shortcuts: `n` new card, `/` search, `1`–`9` switch project, `Esc` close, `?` help.
+
+## Collapsible sidebar
+
+The button at the right of the sidebar header collapses it; when collapsed, the same icon appears at the top of the board to bring it back. The state is remembered in the browser.
+
+## Updating the app from a card
+
+When a card from this very repository enters review, the app offers "New updates". The button rebuilds the app from that card's worktree and restarts it, so you can try the change in the real app. The pending update lives in memory; if the server restarts it is lost. Installer output goes to `%APPDATA%\kanban-board\install.log`.
 
 ## CLI
 
-`backend\bin\kb.exe` (ver `kb` sem argumentos): `projects`, `project-add`, `ls`, `add`, `move`, `run`, `approve`, `cancel`, `logs`, `diff`, `merge`.
+`backend\bin\kb.exe` (run `kb` with no arguments for help): `projects`, `project-add`, `ls`, `add`, `move`, `run`, `approve`, `cancel`, `logs`, `diff`, `merge`.
 
-## MCP (a IA usa o board)
+## MCP (the AI uses the board)
 
-`kb mcp` é um servidor MCP (stdio) com as ferramentas `list_projects`, `list_cards`, `get_card`, `create_card`, `update_card`, `add_note` e `move_card`. `move_card` e `create_card` recusam a coluna `doing`: só você inicia execuções.
+`kb mcp` is an MCP server (stdio) with the tools `list_projects`, `list_cards`, `get_card`, `create_card`, `update_card`, `add_note` and `move_card`. `move_card` and `create_card` refuse the `doing` column: only you start runs.
 
-- **Nas execuções do board**: ligado automaticamente (o servidor precisa achar o `kb.exe` ao lado do `server.exe`, ou use `KB_BIN`). Cada execução recebe o próprio card como padrão, então `add_note` e `get_card` funcionam sem informar o id.
-- **No seu Claude Code**, para conversar com o board de qualquer pasta (o `kb` lê o token sozinho em `%APPDATA%\kanban-board\token`):
+- **In board runs**: enabled automatically (the server must find `kb.exe` next to `server.exe`, or use `KB_BIN`). Each run gets its own card as the default, so `add_note` and `get_card` work without an id.
+- **In your own Claude Code**, to talk to the board from any folder (`kb` reads the token by itself from `%APPDATA%\kanban-board\token`):
 
 ```powershell
 claude mcp add kanban --scope user -- C:\Projetos\kanban_board\backend\bin\kb.exe mcp
@@ -67,13 +90,13 @@ claude mcp add kanban --scope user -- C:\Projetos\kanban_board\backend\bin\kb.ex
 
 ## Config (env)
 
-| Var | Padrão |
+| Var | Default |
 |---|---|
 | `KB_ADDR` | `:7777` |
 | `KB_DATA` | `%APPDATA%\kanban-board` |
-| `KB_TOKEN` | gerado e salvo no 1º start |
-| `KB_ALLOWED_TOOLS` | `Bash,Edit,Write,Read,Glob,Grep` (ferramentas liberadas para o Claude nos worktrees) |
+| `KB_TOKEN` | generated and saved on first start |
+| `KB_ALLOWED_TOOLS` | `Bash,Edit,Write,Read,Glob,Grep` (tools allowed for Claude in worktrees) |
 
-## Desenvolvimento
+## Development
 
-Backend: `cd backend && go run ./cmd/server`. Frontend com hot reload: `cd frontend && npm run dev` (proxy de `/api` para `:7777`; abra o backend uma vez com `?token=` para ganhar o cookie).
+Backend: `cd backend && go run ./cmd/server`. Frontend with hot reload: `cd frontend && npm run dev` (proxies `/api` to `:7777`; open the backend once with `?token=` to get the cookie).

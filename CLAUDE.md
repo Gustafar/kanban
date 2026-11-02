@@ -1,31 +1,32 @@
 # Kanban + Claude
 
-Kanban pessoal e local: cada card pode ser executado pelo Claude Code num git worktree isolado. Visão geral, fluxo, CLI, MCP e variáveis de ambiente estão no [README.md](README.md); aqui ficam só o que você precisa para mexer no código.
+Personal, local kanban board: each card can be run by Claude Code in an isolated git worktree. Overview, flow, CLI, MCP and environment variables are in [README.md](README.md); this file only holds what you need to change the code.
 
-## Estrutura
+## Layout
 
-- `backend/` — Go (módulo `kanban_board`), SQLite via `modernc.org/sqlite`, sem CGO.
-  - `cmd/server` (servidor, compilado como app sem janela), `cmd/kb` (CLI e servidor MCP; também vira `cardume.exe`).
-  - `internal/api` rotas HTTP + SSE · `internal/runner` execução do `claude -p`, worktrees, fila · `internal/store` SQLite · `internal/selfupdate` reinstalação do próprio app · `internal/titler` título/tags por IA · `internal/limits` uso do plano · `internal/notify` avisos do Windows · `internal/proc` utilitários de processo.
-  - `web/dist` é o frontend compilado, embutido no servidor (gerado, não edite).
-- `frontend/` — React 18 + Vite + TypeScript. `src/App.tsx` (shell, barra lateral, atalhos), `src/useBoard.ts` (estado e SSE), `src/api.ts` (chamadas), `src/components/`.
+- `backend/` — Go (module `kanban_board`), SQLite via `modernc.org/sqlite`, no CGO.
+  - `cmd/server` (the server, built as a windowless app), `cmd/kb` (CLI and MCP server; also built as `cardume.exe`).
+  - `internal/api` HTTP routes + SSE · `internal/runner` `claude -p` execution, worktrees, queue · `internal/store` SQLite · `internal/selfupdate` reinstalling the app itself · `internal/titler` AI title/tags · `internal/limits` plan usage · `internal/notify` Windows notifications · `internal/proc` process helpers.
+  - `web/dist` is the compiled frontend, embedded in the server (generated, do not edit).
+- `frontend/` — React 18 + Vite + TypeScript. `src/App.tsx` (shell, sidebar, shortcuts), `src/useBoard.ts` (state and SSE), `src/api.ts` (calls), `src/components/`.
 
-## Comandos
+## Commands
 
-- Frontend: `cd frontend && npm run build` (roda `tsc --noEmit` e o Vite, escrevendo em `backend/web/dist`). Dev com hot reload: `npm run dev`.
-- Backend: `cd backend && go build ./... && go vet ./...`; testes: `go test ./...`.
-- Instalar o app rodando (compila tudo, troca os executáveis, reinicia): `.\install.ps1`. Windows + PowerShell; o usuário roda isso, não rode sem pedir (para o servidor em uso).
+- Frontend: `cd frontend && npm run build` (runs `tsc --noEmit` and Vite, writing to `backend/web/dist`). Hot reload: `npm run dev`.
+- Backend: `cd backend && go build ./... && go vet ./...`; tests: `go test ./...`.
+- Install the running app (builds everything, swaps the executables, restarts): `.\install.ps1`. Windows + PowerShell; the user runs this, do not run it unasked (it stops the server in use).
 
-## Convenções
+## Conventions
 
-- Interface e mensagens ao usuário em **português (pt-BR)**; código e comentários em inglês, comentários curtos e só onde o motivo não é óbvio.
-- Estilos em CSS puro: `styles.css` (base e layout), `detail.css` (gaveta do card), `dialogs.css`, `popover.css`. Use as variáveis (`--ink`, `--line`, `--lane`, …) existentes.
-- Sem dependências novas sem necessidade; o frontend usa só React e dnd-kit.
-- Mobile: o layout muda em `@media (max-width: 900px)` (barra lateral vira faixa horizontal); confira os dois ao mexer no layout.
+- Code, comments, commit messages and docs in **English**; the app **interface and user-facing messages stay in Portuguese (pt-BR)**. Keep comments short and only where the reason is not obvious.
+- Plain CSS: `styles.css` (base and layout), `detail.css` (card drawer), `dialogs.css`, `popover.css`. Use the existing variables (`--ink`, `--line`, `--lane`, …).
+- No new dependencies unless needed; the frontend only uses React and dnd-kit.
+- Mobile: the layout changes at `@media (max-width: 900px)` (sidebar becomes a horizontal strip); check both when touching layout.
 
-## Cuidados
+## Gotchas
 
-- O servidor em execução é a cópia instalada em `backend/bin`; mudar o código não muda o app até reinstalar.
-- A atualização pendente do app (`selfupdate`) e a fila de execuções vivem só na memória do servidor.
-- Execuções em projetos sem git editam a pasta direto (com snapshot); só uma por pasta por vez.
-- `move_card` e `create_card` (MCP) recusam a coluna `doing` de propósito: só o usuário inicia execuções.
+- The running server is the copy installed in `backend/bin`; changing the code does not change the app until you reinstall.
+- The pending app update (`selfupdate`) and the run queue live only in the server's memory.
+- Runs in projects without git edit the folder directly (with a snapshot); only one per folder at a time.
+- `move_card` and `create_card` (MCP) refuse the `doing` column on purpose: only the user starts runs.
+- `PLANO.md` (git-ignored) is the shared work plan between sessions; read it before starting and update it when you finish an item.
