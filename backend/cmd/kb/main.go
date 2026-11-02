@@ -26,6 +26,7 @@ const usage = `kb - CLI do kanban board
   kb logs <card>                           mostra o log da última execução
   kb diff <card>                           mostra o diff da última execução
   kb merge <card>                          faz merge da branch do card
+  kb mcp                                   servidor MCP (stdio) para o Claude usar o board
 
 env: KB_URL (padrão http://localhost:7777), KB_TOKEN`
 
@@ -47,7 +48,8 @@ func token() string {
 	return strings.TrimSpace(string(b))
 }
 
-func call(method, path string, body any, out any) {
+// api talks to the board server and returns errors instead of exiting (the MCP server needs that).
+func api(method, path string, body any, out any) error {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -60,19 +62,26 @@ func call(method, path string, body any, out any) {
 	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		die("servidor indisponível em %s (está rodando?): %v", base, err)
+		return fmt.Errorf("servidor indisponível em %s (está rodando?): %v", base, err)
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		var e struct{ Error string }
 		if json.Unmarshal(data, &e) == nil && e.Error != "" {
-			die("erro: %s", e.Error)
+			return fmt.Errorf("erro: %s", e.Error)
 		}
-		die("erro %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return fmt.Errorf("erro %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	if out != nil && len(data) > 0 {
 		_ = json.Unmarshal(data, out)
+	}
+	return nil
+}
+
+func call(method, path string, body any, out any) {
+	if err := api(method, path, body, out); err != nil {
+		die("%v", err)
 	}
 }
 
@@ -141,6 +150,8 @@ func main() {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "mcp":
+		serveMCP()
 	case "projects":
 		var ps []project
 		call("GET", "/api/projects", nil, &ps)

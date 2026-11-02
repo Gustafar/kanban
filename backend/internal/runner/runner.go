@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,10 +26,39 @@ type Runner struct {
 	mu      sync.Mutex
 	cancels map[int64]context.CancelFunc // runID -> cancel
 	busy    map[int64]bool               // projectID -> a direct-mode run is editing the folder
+
+	mcpBin, baseURL, token string
 }
 
 func New(s *store.Store, dataDir string, p Publisher) *Runner {
 	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}}
+}
+
+// SetMCP lets runs talk to the board: each run gets an MCP server (`kb mcp`) bound to its own card.
+func (r *Runner) SetMCP(bin, baseURL, token string) {
+	r.mcpBin, r.baseURL, r.token = bin, baseURL, token
+}
+
+// mcpConfigFor writes a per-card MCP config and returns its path ("" when MCP is not available).
+func (r *Runner) mcpConfigFor(cardID int64) string {
+	if r.mcpBin == "" {
+		return ""
+	}
+	cfg := map[string]any{"mcpServers": map[string]any{"kanban": map[string]any{
+		"command": r.mcpBin,
+		"args":    []string{"mcp"},
+		"env":     map[string]string{"KB_URL": r.baseURL, "KB_TOKEN": r.token, "KB_CARD_ID": fmt.Sprint(cardID)},
+	}}}
+	dir := filepath.Join(r.dataDir, "mcp")
+	if os.MkdirAll(dir, 0o700) != nil {
+		return ""
+	}
+	path := filepath.Join(dir, fmt.Sprintf("card-%d.json", cardID))
+	b, _ := json.Marshal(cfg)
+	if os.WriteFile(path, b, 0o600) != nil { // holds the token: owner-only
+		return ""
+	}
+	return path
 }
 
 func (r *Runner) lockProject(id int64) bool {
@@ -217,8 +247,16 @@ func (r *Runner) execute(runID int64) {
 	if allowed == "" {
 		allowed = "Bash,Edit,Write,Read,Glob,Grep"
 	}
+	mcpCfg := r.mcpConfigFor(card.ID)
+	if mcpCfg != "" {
+		// "mcp__kanban" pre-approves every tool of the board server; move_card refuses "doing" itself
+		allowed += ",mcp__kanban"
+	}
 	args := []string{"-p", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "acceptEdits", "--allowedTools", allowed}
+	if mcpCfg != "" {
+		args = append(args, "--mcp-config", mcpCfg)
+	}
 	if resume != "" {
 		args = append(args, "--resume", resume)
 	}

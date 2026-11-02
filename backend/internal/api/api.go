@@ -32,6 +32,9 @@ func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
 	return srv, hub
 }
 
+// ConfigureMCP gives runs access to the board through `kb mcp` (bin = path to kb.exe).
+func (s *Server) ConfigureMCP(bin, baseURL string) { s.runner.SetMCP(bin, baseURL, s.token) }
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/events", s.sse)

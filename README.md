@@ -28,6 +28,17 @@ Ao criar o projeto o app detecta o modo pela pasta, e o diálogo oferece "Inicia
 
 `backend\bin\kb.exe` (ver `kb` sem argumentos): `projects`, `project-add`, `ls`, `add`, `move`, `run`, `approve`, `cancel`, `logs`, `diff`, `merge`.
 
+## MCP (a IA usa o board)
+
+`kb mcp` é um servidor MCP (stdio) com as ferramentas `list_projects`, `list_cards`, `get_card`, `create_card`, `update_card`, `add_note` e `move_card`. `move_card` e `create_card` recusam a coluna `doing`: só você inicia execuções.
+
+- **Nas execuções do board**: ligado automaticamente (o servidor precisa achar o `kb.exe` ao lado do `server.exe`, ou use `KB_BIN`). Cada execução recebe o próprio card como padrão, então `add_note` e `get_card` funcionam sem informar o id.
+- **No seu Claude Code**, para conversar com o board de qualquer pasta (o `kb` lê o token sozinho em `%APPDATA%\kanban-board\token`):
+
+```powershell
+claude mcp add kanban --scope user -- C:\Projetos\kanban_board\backend\bin\kb.exe mcp
+```
+
 ## Config (env)
 
 | Var | Padrão |

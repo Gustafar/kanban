@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"kanban_board/internal/api"
@@ -44,6 +45,26 @@ func loadToken(dir string) string {
 	return t
 }
 
+// kbBinary locates the CLI (KB_BIN, or kb.exe next to the server binary).
+func kbBinary() string {
+	if p := os.Getenv("KB_BIN"); p != "" {
+		return p
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	name := "kb"
+	if runtime.GOOS == "windows" {
+		name = "kb.exe"
+	}
+	p := filepath.Join(filepath.Dir(exe), name)
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
 func lanIPs() []string {
 	var out []string
 	addrs, _ := net.InterfaceAddrs()
@@ -76,6 +97,12 @@ func main() {
 		addr = ":7777"
 	}
 	_, port, _ := net.SplitHostPort(addr)
+	if bin := kbBinary(); bin != "" {
+		srv.ConfigureMCP(bin, "http://127.0.0.1:"+port)
+		log.Printf("mcp:    runs usam %s mcp", bin)
+	} else {
+		log.Printf("mcp:    kb.exe não encontrado ao lado do servidor; execuções sem acesso ao board")
+	}
 	log.Printf("dados em %s", dir)
 	log.Printf("local:  http://localhost:%s/?token=%s", port, token)
 	for _, ip := range lanIPs() {
