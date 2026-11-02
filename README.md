@@ -46,7 +46,7 @@ When you create a project the app detects the mode from the folder, and the dial
 - **With approval** card: when it enters execution it stays "Awaiting your approval" until you approve. **Automatic**: runs on its own.
 - Each run creates the branch `kb/card-<id>-<slug>` in `<project-folder>\..\.kanban-worktrees\`. In review you see the diff and merge or discard.
 - "Ask for changes" continues the same Claude session (`--resume`).
-- Notifications: Windows toast (from the server) and browser notification (localhost/HTTPS only).
+- Notifications: the bell in the top bar (in-app list) and a browser notification when the tab is in the background (localhost/HTTPS only).
 
 ## Parallel run limit
 

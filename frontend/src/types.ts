@@ -24,7 +24,8 @@ export interface Attachment { id: number; cardId: number; name: string; mime: st
 export const isImage = (mime: string) => /^image\/(png|jpeg|gif|webp)/.test(mime)
 export interface Comment { id: number; cardId: number; author: 'user' | 'ai'; body: string; runId: number; file: string; line: number; createdAt: string }
 export interface Chat { id: number; projectId: number; title: string; model: string; effort: string; busy: boolean; createdAt: string; updatedAt: string }
-export interface ChatMessage { id: number; chatId: number; role: 'user' | 'assistant' | 'tool' | 'error'; body: string; createdAt: string }
+export interface ChatAttachment { id: number; chatId: number; messageId: number; name: string; mime: string; size: number; createdAt: string }
+export interface ChatMessage { id: number; chatId: number; role: 'user' | 'assistant' | 'tool' | 'error'; body: string; createdAt: string; attachments: ChatAttachment[] }
 export interface Run {
   id: number; cardId: number; status: RunStatus; sessionId: string
   branch: string; worktreePath: string; prompt: string; error: string

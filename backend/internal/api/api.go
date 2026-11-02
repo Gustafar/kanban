@@ -119,6 +119,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chats/{id}/messages", s.listChatMessages)
 	mux.HandleFunc("POST /api/chats/{id}/messages", s.sendChatMessage)
 	mux.HandleFunc("POST /api/chats/{id}/cancel", s.cancelChat)
+	mux.HandleFunc("POST /api/chats/{id}/attachments", s.addChatAttachment)
+	mux.HandleFunc("GET /api/chat-attachments/{id}", s.serveChatAttachment)
+	mux.HandleFunc("DELETE /api/chat-attachments/{id}", s.deleteChatAttachment)
 
 	mux.HandleFunc("GET /api/runs/{id}/events", s.runEvents)
 	mux.HandleFunc("POST /api/runs/{id}/approve", s.approveRun)

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"kanban_board/internal/limits"
-	"kanban_board/internal/notify"
 	"kanban_board/internal/proc"
 	"kanban_board/internal/store"
 )
@@ -153,7 +152,6 @@ func (r *Runner) Request(card store.Card, message string) (store.Run, error) {
 	if auto {
 		r.schedule(run.ID)
 	} else {
-		go notify.Toast("Aprovação necessária", card.Title)
 		r.publish("notify", map[string]any{"kind": "approval", "title": "Aprovação necessária", "body": card.Title, "cardId": card.ID})
 	}
 	return run, nil
@@ -470,7 +468,6 @@ func (r *Runner) finish(run store.Run, card store.Card, status, errMsg string) {
 		r.publish("card", c)
 	}
 	if title != "" {
-		go notify.Toast(title, body)
 		r.publish("notify", map[string]any{"kind": status, "title": title, "body": body, "cardId": card.ID})
 	}
 }

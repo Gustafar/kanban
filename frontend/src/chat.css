@@ -36,6 +36,12 @@
 
 .chat-composer { padding: 12px 20px calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
 .chat-composer .composer-row { align-items: flex-end; }
+.chat-composer .quick-files { padding: 0 0 10px; }
+.drawer.chat[data-over] { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.chat-files { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-files img { display: block; max-width: 220px; max-height: 160px; border-radius: 10px; object-fit: cover; }
+.chat-file-doc { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; background: rgb(0 0 0 / 0.18); color: inherit; font-size: 13px; }
+.chat-files a { color: inherit; text-decoration: none; }
 
 @media (max-width: 900px) {
   .chat-head { padding-left: 14px; flex-wrap: wrap; }

@@ -6,7 +6,7 @@ Personal, local kanban board: each card can be run by Claude Code in an isolated
 
 - `backend/` — Go (module `kanban_board`), SQLite via `modernc.org/sqlite`, no CGO.
   - `cmd/server` (the server, built as a windowless app), `cmd/kb` (CLI and MCP server; also built as `cardume.exe`).
-  - `internal/api` HTTP routes + SSE · `internal/runner` `claude -p` execution, worktrees, queue · `internal/store` SQLite · `internal/selfupdate` reinstalling the app itself · `internal/titler` AI title/tags · `internal/limits` plan usage · `internal/notify` Windows notifications · `internal/proc` process helpers.
+  - `internal/api` HTTP routes + SSE · `internal/runner` `claude -p` execution, worktrees, queue · `internal/store` SQLite · `internal/selfupdate` reinstalling the app itself · `internal/titler` AI title/tags · `internal/limits` plan usage · `internal/proc` process helpers.
   - `web/dist` is the compiled frontend, embedded in the server (generated, do not edit).
 - `frontend/` — React 18 + Vite + TypeScript. `src/App.tsx` (shell, sidebar, shortcuts), `src/useBoard.ts` (state and SSE), `src/api.ts` (calls), `src/components/`.
 

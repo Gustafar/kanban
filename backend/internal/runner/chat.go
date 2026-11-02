@@ -80,8 +80,22 @@ func (r *Runner) chatMessage(chatID int64, role, body string) {
 	}
 }
 
-// SendChat stores the user's message and starts the AI's answer in the background.
-func (r *Runner) SendChat(chat store.Chat, text string) error {
+func (r *Runner) chatAttachDir(chatID int64) string {
+	return filepath.Join(r.dataDir, "attachments", fmt.Sprintf("chat-%d", chatID))
+}
+
+// SendChat stores the user's message (with the files already uploaded to this chat) and starts the
+// AI's answer in the background.
+func (r *Runner) SendChat(chat store.Chat, text string, attachIDs []int64) error {
+	var files []store.ChatAttachment
+	for _, id := range attachIDs {
+		a, err := r.store.GetChatAttachment(id)
+		if err != nil || a.ChatID != chat.ID || a.MessageID != 0 {
+			return errors.New("anexo inválido ou já enviado")
+		}
+		files = append(files, a)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	r.mu.Lock()
 	if _, busy := r.chatCancels[chat.ID]; busy {
@@ -92,8 +106,29 @@ func (r *Runner) SendChat(chat store.Chat, text string) error {
 	r.chatCancels[chat.ID] = cancel
 	r.mu.Unlock()
 
-	r.chatMessage(chat.ID, "user", text)
+	if m, err := r.store.AddChatMessage(chat.ID, "user", text); err == nil {
+		if r.store.LinkChatAttachments(m.ID, attachIDs) == nil {
+			for i := range files {
+				files[i].MessageID = m.ID
+			}
+			m.Attachments = append(m.Attachments, files...)
+		}
+		r.publish("chat_message", m)
+	}
 	r.publishChat(chat.ID)
+
+	prompt := text
+	if len(files) > 0 {
+		if prompt == "" {
+			prompt = "Veja os arquivos anexados."
+		}
+		var b strings.Builder
+		b.WriteString(prompt + "\n\nArquivos anexados a esta mensagem (locais; use a ferramenta Read para ver imagens e PDFs):\n")
+		for _, a := range files {
+			fmt.Fprintf(&b, "- %s (%s)\n", a.Path, a.Name)
+		}
+		prompt = b.String()
+	}
 	go func() {
 		defer func() {
 			cancel()
@@ -102,7 +137,7 @@ func (r *Runner) SendChat(chat store.Chat, text string) error {
 			r.mu.Unlock()
 			r.publishChat(chat.ID)
 		}()
-		r.runChat(ctx, chat, text)
+		r.runChat(ctx, chat, prompt)
 	}()
 	return nil
 }
@@ -124,6 +159,9 @@ func (r *Runner) runChat(ctx context.Context, chat store.Chat, text string) {
 		"--append-system-prompt", fmt.Sprintf(chatSystemPrompt, project.Name, project.Path),
 		"--mcp-config", mcpCfg}
 	args = append(args, modelArgs(store.Card{Model: chat.Model, Effort: chat.Effort})...)
+	if _, err := os.Stat(r.chatAttachDir(chat.ID)); err == nil {
+		args = append(args, "--add-dir", r.chatAttachDir(chat.ID)) // lets the Read tool open the files
+	}
 	if chat.SessionID != "" {
 		args = append(args, "--resume", chat.SessionID)
 	}

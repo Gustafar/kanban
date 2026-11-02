@@ -1,4 +1,4 @@
-import type { Attachment, Card, Chat, ChatMessage, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent, ServerStatus, UsageReport, Limits } from './types'
+import type { Attachment, Card, Chat, ChatAttachment, ChatMessage, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent, ServerStatus, UsageReport, Limits } from './types'
 
 type ProjectInput = Pick<Project, 'name' | 'path' | 'color' | 'isolation'>
 
@@ -58,7 +58,15 @@ export const api = {
   updateChat: (id: number, c: { title?: string; model?: string; effort?: string }) => req<Chat>('PUT', `/chats/${id}`, c),
   deleteChat: (id: number) => req<void>('DELETE', `/chats/${id}`),
   chatMessages: (id: number) => req<ChatMessage[]>('GET', `/chats/${id}/messages`),
-  sendChat: (id: number, text: string) => req<void>('POST', `/chats/${id}/messages`, { text }),
+  sendChat: (id: number, text: string, attachmentIds: number[] = []) => req<void>('POST', `/chats/${id}/messages`, { text, attachmentIds }),
+  uploadChatAttachment: async (chatId: number, file: File) => {
+    const res = await fetch(`/api/chats/${chatId}/attachments?name=${encodeURIComponent(file.name || 'colado.png')}`, {
+      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `Erro ${res.status}`)
+    return data as ChatAttachment
+  },
   cancelChat: (id: number) => req<void>('POST', `/chats/${id}/cancel`),
   events: (runId: number) => req<RunEvent[]>('GET', `/runs/${runId}/events`),
   pendingUpdate: () => req<{ pending: { cardId: number; title: string; error?: string } | null }>('GET', '/update'),

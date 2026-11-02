@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { KeyboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
 import { api } from '../api'
 import type { BoardListener } from '../useBoard'
+import { isImage } from '../types'
 import type { Chat, ChatMessage, Project } from '../types'
-import { Check, Chevron, Chat as ChatIcon, Close, Plus, Send } from './Icons'
+import { Check, Chevron, Chat as ChatIcon, Clip, Close, Plus, Send } from './Icons'
 import { Markdown } from './Markdown'
 import { ModelPicker } from './ModelPicker'
 import { Popover } from './Popover'
@@ -14,6 +15,10 @@ interface Props {
   onClose: () => void
   onError: (m: string) => void
 }
+
+const MAX_FILE = 15 * 1024 * 1024
+
+interface Pending { key: number; file: File; url: string | null }
 
 const byRecent = (a: Chat, b: Chat) => b.updatedAt.localeCompare(a.updatedAt)
 
@@ -86,6 +91,12 @@ export function ChatPanel({ project, subscribe, onClose, onError }: Props) {
   const [draftModel, setDraftModel] = useState({ model: '', effort: '' })
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [files, setFiles] = useState<Pending[]>([])
+  const [over, setOver] = useState(false)
+  const seq = useRef(0)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const filesRef = useRef(files)
+  filesRef.current = files
   const scrollRef = useRef<HTMLDivElement>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
   const activeRef = useRef<number | null>(null)
@@ -128,10 +139,39 @@ export function ChatPanel({ project, subscribe, onClose, onError }: Props) {
   }, [onClose])
 
   useEffect(() => { areaRef.current?.focus() }, [activeId])
+  useEffect(() => () => filesRef.current.forEach(f => f.url && URL.revokeObjectURL(f.url)), [])
+
+  function addFiles(list: File[]) {
+    const ok: Pending[] = []
+    for (const file of list) {
+      if (file.size > MAX_FILE) { onError(`"${file.name || 'arquivo'}" passa de 15 MB e não foi anexado.`); continue }
+      ok.push({ key: ++seq.current, file, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null })
+    }
+    if (ok.length) setFiles(l => [...l, ...ok])
+  }
+
+  function removeFile(key: number) {
+    setFiles(l => {
+      const f = l.find(x => x.key === key)
+      if (f?.url) URL.revokeObjectURL(f.url)
+      return l.filter(x => x.key !== key)
+    })
+  }
+
+  function onPaste(e: ClipboardEvent) {
+    const pasted = [...e.clipboardData.files]
+    if (pasted.length) { e.preventDefault(); addFiles(pasted) }
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    setOver(false)
+    if (e.dataTransfer.files.length) addFiles([...e.dataTransfer.files])
+  }
 
   const send = useCallback(async () => {
     const value = text.trim()
-    if (!value || busy) return
+    if ((!value && files.length === 0) || busy) return
     setSending(true)
     try {
       let id = activeId
@@ -141,10 +181,14 @@ export function ChatPanel({ project, subscribe, onClose, onError }: Props) {
         activeRef.current = id = c.id
         setActiveId(c.id)
       }
+      const ids: number[] = []
+      for (const f of files) ids.push((await api.uploadChatAttachment(id, f.file)).id)
+      files.forEach(f => f.url && URL.revokeObjectURL(f.url))
+      setFiles([])
       setText('')
-      await api.sendChat(id, value)
+      await api.sendChat(id, value, ids)
     } catch (e) { onError((e as Error).message) } finally { setSending(false) }
-  }, [text, busy, activeId, project.id, draftModel, onError])
+  }, [text, files, busy, activeId, project.id, draftModel, onError])
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() }
@@ -171,7 +215,8 @@ export function ChatPanel({ project, subscribe, onClose, onError }: Props) {
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <aside className="drawer chat" aria-label={`Conversa com a IA — ${project.name}`}>
+      <aside className="drawer chat" data-over={over || undefined} aria-label={`Conversa com a IA — ${project.name}`}
+        onDragOver={e => { e.preventDefault(); setOver(true) }} onDragLeave={e => { if (e.currentTarget === e.target) setOver(false) }} onDrop={onDrop}>
         <header className="chat-head">
           <span className="dot" style={{ background: project.color }} />
           <ChatPicker chats={chats} activeId={activeId} onPick={setActiveId} onDelete={c => void remove(c)} />
@@ -200,7 +245,20 @@ export function ChatPanel({ project, subscribe, onClose, onError }: Props) {
                 <li key={m.id} className="chat-error">{m.body}</li>
               ) : (
                 <li key={m.id} className="chat-msg" data-role={m.role}>
-                  <div className="chat-bubble">{m.role === 'assistant' ? <Markdown text={m.body} /> : <p>{m.body}</p>}</div>
+                  <div className="chat-bubble">
+                    {m.attachments?.length > 0 && (
+                      <ul className="chat-files">
+                        {m.attachments.map(a => (
+                          <li key={a.id}>
+                            <a href={`/api/chat-attachments/${a.id}`} target="_blank" rel="noreferrer" title={a.name}>
+                              {isImage(a.mime) ? <img src={`/api/chat-attachments/${a.id}`} alt={a.name} loading="lazy" /> : <span className="chat-file-doc"><Clip />{a.name}</span>}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {m.role === 'assistant' ? <Markdown text={m.body} /> : m.body && <p>{m.body}</p>}
+                  </div>
                   <time dateTime={m.createdAt}>{stamp(m.createdAt)}</time>
                 </li>
               ))}
@@ -210,15 +268,27 @@ export function ChatPanel({ project, subscribe, onClose, onError }: Props) {
         </div>
 
         <div className="chat-composer">
+          {files.length > 0 && (
+            <ul className="quick-files" aria-label="Anexos pendentes">
+              {files.map(f => (
+                <li key={f.key} title={f.file.name}>
+                  {f.url ? <img src={f.url} alt="" /> : <span className="file-ext">{(f.file.name.split('.').pop() || 'arq').slice(0, 4)}</span>}
+                  <button type="button" onClick={() => removeFile(f.key)} aria-label={`Remover ${f.file.name || 'anexo'}`}><Close /></button>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="composer-row">
+            <button type="button" className="icon-btn" onClick={() => fileInput.current?.click()} aria-label="Anexar arquivo" title="Anexar (ou cole um print)" disabled={busy}><Clip /></button>
+            <input ref={fileInput} type="file" multiple hidden onChange={e => { addFiles([...(e.target.files ?? [])]); e.target.value = '' }} />
             <textarea
-              ref={areaRef} rows={1} value={text} onChange={e => setText(e.target.value)} onKeyDown={onKeyDown}
-              placeholder="Peça algo sobre o quadro… (Enter envia, Shift+Enter quebra a linha)" aria-label="Mensagem para a IA"
+              ref={areaRef} rows={1} value={text} onChange={e => setText(e.target.value)} onKeyDown={onKeyDown} onPaste={onPaste}
+              placeholder="Peça algo sobre o quadro… (Enter envia, cole prints com Ctrl+V)" aria-label="Mensagem para a IA"
             />
             {busy && active?.busy ? (
               <button type="button" className="btn" onClick={() => api.cancelChat(active.id).catch(e => onError(e.message))}>Parar</button>
             ) : (
-              <button type="button" className="send" onClick={() => void send()} disabled={busy || !text.trim()} aria-label="Enviar" title="Enviar (Enter)">
+              <button type="button" className="send" onClick={() => void send()} disabled={busy || (!text.trim() && files.length === 0)} aria-label="Enviar" title="Enviar (Enter)">
                 {sending ? <span className="spinner" /> : <Send />}
               </button>
             )}
