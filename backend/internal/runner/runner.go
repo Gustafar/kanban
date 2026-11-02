@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kanban_board/internal/notify"
+	"kanban_board/internal/proc"
 	"kanban_board/internal/store"
 )
 
@@ -261,6 +262,7 @@ func (r *Runner) execute(runID int64) {
 		args = append(args, "--resume", resume)
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
+	proc.Hide(cmd)
 	cmd.Dir = wt
 	cmd.Stdin = strings.NewReader(run.Prompt) // stdin avoids Windows quoting issues
 	stdout, _ := cmd.StdoutPipe()

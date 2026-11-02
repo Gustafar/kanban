@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ const usage = `kb - CLI do kanban board
   kb diff <card>                           mostra o diff da última execução
   kb merge <card>                          faz merge da branch do card
   kb mcp                                   servidor MCP (stdio) para o Claude usar o board
+  kb open                                  abre o board no navegador (já com o token)
 
 env: KB_URL (padrão http://localhost:7777), KB_TOKEN`
 
@@ -152,6 +154,12 @@ func main() {
 	switch cmd {
 	case "mcp":
 		serveMCP()
+	case "open":
+		url := base + "/?token=" + token()
+		if err := exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start(); err != nil {
+			die("não consegui abrir o navegador: %v", err)
+		}
+		fmt.Println("abrindo", base)
 	case "projects":
 		var ps []project
 		call("GET", "/api/projects", nil, &ps)

@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+
+	"kanban_board/internal/proc"
 )
 
 const script = `
@@ -24,6 +26,7 @@ func Toast(title, body string) {
 		return
 	}
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
+	proc.Hide(cmd)
 	cmd.Env = append(os.Environ(), "KB_TITLE="+title, "KB_BODY="+body)
 	_ = cmd.Run()
 }

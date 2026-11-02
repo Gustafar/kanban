@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"kanban_board/internal/proc"
 )
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -24,6 +26,7 @@ func slug(s string) string {
 
 func git(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
+	proc.Hide(cmd)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	s := strings.TrimSpace(string(out))

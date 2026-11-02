@@ -2,7 +2,16 @@
 
 Kanban pessoal e local. Cada projeto aponta para um repositório git; ao mover um card para **Em execução**, o Claude Code (seu login, via CLI `claude`) trabalha num git worktree isolado e o card vai para **Revisão** quando termina.
 
-## Rodar
+## Instalar (recomendado)
+
+```powershell
+.\install.ps1     # compila, sobe com o Windows (sem janela), cria o atalho "Kanban"
+.\uninstall.ps1   # remove a inicialização e os atalhos (os dados ficam)
+```
+
+Depois disso nada precisa ficar aberto: o servidor roda em segundo plano, o log fica em `%APPDATA%\kanban-board\server.log` e `kb open` abre o board no navegador. Depois de mudar o código, rode `.\install.ps1` de novo.
+
+## Rodar só uma vez (com terminal)
 
 ```powershell
 .\start.ps1

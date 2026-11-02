@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -45,6 +46,20 @@ func loadToken(dir string) string {
 	return t
 }
 
+// setupLog mirrors the log to a file: when installed as a background app there is no console to read.
+func setupLog(dir string) {
+	path := filepath.Join(dir, "server.log")
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 5<<20 {
+		_ = os.Remove(path) // crude rotation
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) // the log holds the access URL
+	if err != nil {
+		return
+	}
+	// file first: without a console, writes to stderr fail and MultiWriter stops at the first error
+	log.SetOutput(io.MultiWriter(f, os.Stderr))
+}
+
 // kbBinary locates the CLI (KB_BIN, or kb.exe next to the server binary).
 func kbBinary() string {
 	if p := os.Getenv("KB_BIN"); p != "" {
@@ -82,6 +97,7 @@ func main() {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		log.Fatal(err)
 	}
+	setupLog(dir)
 	st, err := store.Open(filepath.Join(dir, "kanban.db"))
 	if err != nil {
 		log.Fatal(err)
