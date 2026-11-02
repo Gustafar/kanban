@@ -35,7 +35,7 @@ Ao criar o projeto o app detecta o modo pela pasta, e o diálogo oferece "Inicia
 
 ## Limite de execuções em paralelo
 
-No máximo N execuções da IA rodam ao mesmo tempo (padrão 2); as demais ficam **na fila** e começam na ordem de chegada quando uma vaga abre. Dá para tirar um card da fila na gaveta. O limite (1 a 8) é ajustado com o − / + no rodapé da barra lateral e fica salvo; `KB_MAX_PARALLEL` define o valor inicial. A fila vive na memória: se o servidor reiniciar, execuções em andamento ou na fila são marcadas como falhas.
+No máximo N execuções da IA rodam ao mesmo tempo (padrão 2); as demais ficam **na fila** e começam na ordem de chegada quando uma vaga abre. Dá para tirar um card da fila na gaveta. O limite (1 a 8) é ajustado com o − / + no rodapé da barra lateral e fica salvo; `KB_MAX_PARALLEL` define o valor inicial. Em projetos "direto na pasta" (sem git) só uma execução edita a pasta por vez, para não se atrapalharem: as outras esperam na fila (sem ocupar uma vaga) e começam sozinhas. Projetos com git isolam cada execução num worktree e rodam em paralelo de verdade. A fila vive na memória: se o servidor reiniciar, execuções em andamento ou na fila são marcadas como falhas.
 
 ## Barra de captura, tags e anexos
 

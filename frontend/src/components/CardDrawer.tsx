@@ -189,7 +189,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
               </>}
               {status === 'running' && <button className="btn danger" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Parar execução</button>}
               {status === 'queued' && <>
-                <span className="muted queue-note">Todas as vagas de execução estão ocupadas. Começa assim que uma liberar.</span>
+                <span className="muted queue-note">Na fila: as vagas estão ocupadas ou outra execução está editando a mesma pasta. Começa sozinha assim que possível.</span>
                 <button className="btn ghost" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Sair da fila</button>
               </>}
               {finished && <>

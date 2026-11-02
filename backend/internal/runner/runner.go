@@ -29,7 +29,7 @@ type Runner struct {
 	busy    map[int64]bool               // projectID -> a direct-mode run is editing the folder
 	max     int                          // parallelism limit (see queue.go)
 	running int                          // slots in use
-	queue   []int64                      // run ids waiting for a slot, FIFO
+	queue   []queued                     // runs waiting for a slot (or for their folder), FIFO
 
 	mcpBin, baseURL, token string
 }
@@ -81,22 +81,6 @@ func (r *Runner) mcpConfigFor(cardID int64) string {
 		return ""
 	}
 	return path
-}
-
-func (r *Runner) lockProject(id int64) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.busy[id] {
-		return false
-	}
-	r.busy[id] = true
-	return true
-}
-
-func (r *Runner) unlockProject(id int64) {
-	r.mu.Lock()
-	delete(r.busy, id)
-	r.mu.Unlock()
 }
 
 const promptTmpl = `Você está trabalhando em uma tarefa de um quadro kanban, dentro de um git worktree isolado (branch própria).
@@ -218,12 +202,7 @@ func (r *Runner) execute(runID int64) {
 	var shadow *Shadow
 	var branch, wt string
 	if direct {
-		// one editor at a time: the folder is shared with you and with other cards
-		if !r.lockProject(project.ID) {
-			r.finish(run, card, "failed", "outra execução já está editando a pasta deste projeto; aguarde ela terminar")
-			return
-		}
-		defer r.unlockProject(project.ID)
+		// the scheduler already reserved this folder for us (one editor at a time, see queue.go)
 		wt = project.Path
 		if shadow, err = NewShadow(r.dataDir, project.ID, project.Path); err == nil {
 			var base string
@@ -310,6 +289,7 @@ func (r *Runner) execute(runID int64) {
 	for sc.Scan() {
 		if e, ok := r.handleLine(runID, sc.Bytes()); ok {
 			isError, resultErr, resultText = e.isError, e.err, e.text
+			_ = r.store.SetRunUsage(runID, e.costUSD, e.inputTokens, e.outputTokens, e.cacheReadTokens, e.cacheCreationTokens)
 		}
 	}
 	waitErr := cmd.Wait()
@@ -348,17 +328,30 @@ type resultInfo struct {
 	isError bool
 	err     string
 	text    string
+
+	costUSD             float64
+	inputTokens         int64
+	outputTokens        int64
+	cacheReadTokens     int64
+	cacheCreationTokens int64
 }
 
 // handleLine translates one stream-json line into stored/broadcast events.
 func (r *Runner) handleLine(runID int64, line []byte) (resultInfo, bool) {
 	var m struct {
-		Type      string `json:"type"`
-		Subtype   string `json:"subtype"`
-		SessionID string `json:"session_id"`
-		IsError   bool   `json:"is_error"`
-		Result    string `json:"result"`
-		Message   struct {
+		Type         string  `json:"type"`
+		Subtype      string  `json:"subtype"`
+		SessionID    string  `json:"session_id"`
+		IsError      bool    `json:"is_error"`
+		Result       string  `json:"result"`
+		TotalCostUSD float64 `json:"total_cost_usd"`
+		Usage        struct {
+			InputTokens              int64 `json:"input_tokens"`
+			OutputTokens             int64 `json:"output_tokens"`
+			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+		Message struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
 	}
@@ -395,7 +388,15 @@ func (r *Runner) handleLine(runID int64, line []byte) (resultInfo, bool) {
 			kind = "error"
 		}
 		r.emit(runID, kind, m.Result)
-		info := resultInfo{isError: m.IsError, text: m.Result}
+		info := resultInfo{
+			isError:             m.IsError,
+			text:                m.Result,
+			costUSD:             m.TotalCostUSD,
+			inputTokens:         m.Usage.InputTokens,
+			outputTokens:        m.Usage.OutputTokens,
+			cacheReadTokens:     m.Usage.CacheReadInputTokens,
+			cacheCreationTokens: m.Usage.CacheCreationInputTokens,
+		}
 		if m.IsError {
 			info.err = m.Result
 		}

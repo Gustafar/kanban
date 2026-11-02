@@ -1,7 +1,8 @@
 package runner
 
-// Parallelism limit: at most `max` runs execute at once; the rest wait in a FIFO queue
-// and start as slots free up. Slots are held by runSlot for the whole life of a run.
+// Parallelism: at most `max` runs execute at once, and a project that runs "direct" (no git isolation)
+// lets only one run edit its folder at a time. Runs that cannot start yet wait in a FIFO queue, without
+// holding a slot, and start as soon as both a slot and their folder are free.
 
 const (
 	DefaultMaxParallel = 2
@@ -14,6 +15,12 @@ type Status struct {
 	Queued  int `json:"queued"`
 }
 
+// queued is a run waiting to start; direct runs must also win their project's folder.
+type queued struct {
+	runID, projectID int64
+	direct           bool
+}
+
 func (r *Runner) Status() Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -21,6 +28,59 @@ func (r *Runner) Status() Status {
 }
 
 func (r *Runner) publishStatus() { r.publish("status", r.Status()) }
+
+// queueInfo looks up which project (and isolation mode) a run belongs to.
+func (r *Runner) queueInfo(runID int64) queued {
+	q := queued{runID: runID}
+	run, err := r.store.GetRun(runID)
+	if err != nil {
+		return q
+	}
+	card, err := r.store.GetCard(run.CardID)
+	if err != nil {
+		return q
+	}
+	if p, err := r.store.GetProject(card.ProjectID); err == nil {
+		q.projectID, q.direct = p.ID, p.Isolation == "direct"
+	}
+	return q
+}
+
+// popStartableLocked removes and returns the first queued run whose folder is free, reserving the folder.
+// The caller holds r.mu and owns the slot accounting.
+func (r *Runner) popStartableLocked() (queued, bool) {
+	for i, q := range r.queue {
+		if q.direct && r.busy[q.projectID] {
+			continue
+		}
+		r.queue = append(r.queue[:i], r.queue[i+1:]...)
+		if q.direct {
+			r.busy[q.projectID] = true
+		}
+		return q, true
+	}
+	return queued{}, false
+}
+
+// startWaiting launches queued runs into every free slot whose folder is available.
+func (r *Runner) startWaiting() {
+	for {
+		r.mu.Lock()
+		if r.running >= r.max {
+			r.mu.Unlock()
+			return
+		}
+		q, ok := r.popStartableLocked()
+		if !ok {
+			r.mu.Unlock()
+			return
+		}
+		r.running++
+		r.mu.Unlock()
+		r.markStatus(q.runID, "running")
+		go r.runSlot(q)
+	}
+}
 
 // SetMax changes the limit; a higher limit immediately starts waiting runs.
 func (r *Runner) SetMax(n int) {
@@ -33,69 +93,64 @@ func (r *Runner) SetMax(n int) {
 	r.mu.Lock()
 	r.max = n
 	r.mu.Unlock()
-	for {
-		r.mu.Lock()
-		if r.running >= r.max || len(r.queue) == 0 {
-			r.mu.Unlock()
-			break
-		}
-		id := r.queue[0]
-		r.queue = r.queue[1:]
-		r.running++
-		r.mu.Unlock()
-		r.markStatus(id, "running")
-		go r.runSlot(id)
-	}
+	r.startWaiting()
 	r.publishStatus()
 }
 
-// schedule starts the run now if a slot is free, otherwise queues it.
+// schedule starts the run now if a slot (and its folder) is free, otherwise queues it.
 func (r *Runner) schedule(runID int64) {
+	q := r.queueInfo(runID)
 	r.mu.Lock()
-	if r.running < r.max {
+	if r.running < r.max && !(q.direct && r.busy[q.projectID]) {
 		r.running++
+		if q.direct {
+			r.busy[q.projectID] = true
+		}
 		r.mu.Unlock()
 		r.markStatus(runID, "running")
-		go r.runSlot(runID)
+		go r.runSlot(q)
 	} else {
-		r.queue = append(r.queue, runID)
+		r.queue = append(r.queue, q)
 		r.mu.Unlock()
 		r.markStatus(runID, "queued")
 	}
 	r.publishStatus()
 }
 
-// runSlot owns one slot: it executes its run, then keeps the slot for the next queued run (if any).
-func (r *Runner) runSlot(runID int64) {
-	for runID != 0 {
-		r.execute(runID)
-		runID = r.takeNext()
-		if runID != 0 {
-			r.markStatus(runID, "running")
+// runSlot owns one slot: it executes its run, frees the folder, then keeps the slot for the next startable run.
+func (r *Runner) runSlot(q queued) {
+	for {
+		r.execute(q.runID)
+		r.mu.Lock()
+		if q.direct {
+			delete(r.busy, q.projectID)
 		}
-		r.publishStatus()
-	}
-}
+		var next queued
+		ok := false
+		if r.running <= r.max { // a lowered limit releases the slot instead of taking more work
+			next, ok = r.popStartableLocked()
+		}
+		if !ok {
+			r.running--
+		}
+		r.mu.Unlock()
 
-// takeNext pops the next queued run, or releases the slot when there is none (or the limit was lowered).
-func (r *Runner) takeNext() int64 {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.running > r.max || len(r.queue) == 0 {
-		r.running--
-		return 0
+		r.startWaiting() // the freed folder may unblock a run that fits in another free slot
+		r.publishStatus()
+		if !ok {
+			return
+		}
+		r.markStatus(next.runID, "running")
+		q = next
 	}
-	id := r.queue[0]
-	r.queue = r.queue[1:]
-	return id
 }
 
 // dequeue removes a waiting run; it reports whether the run was in the queue.
 func (r *Runner) dequeue(runID int64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i, id := range r.queue {
-		if id == runID {
+	for i, q := range r.queue {
+		if q.runID == runID {
 			r.queue = append(r.queue[:i], r.queue[i+1:]...)
 			return true
 		}

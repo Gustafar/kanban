@@ -80,18 +80,47 @@ type Comment struct {
 }
 
 type Run struct {
-	ID           int64      `json:"id"`
-	CardID       int64      `json:"cardId"`
-	Status       string     `json:"status"` // awaiting_approval | running | succeeded | failed | cancelled
-	SessionID    string     `json:"sessionId"`
-	Branch       string     `json:"branch"`
-	WorktreePath string     `json:"worktreePath"`
-	BaseRef      string     `json:"baseRef"` // direct mode: shadow commit taken before the run
-	Prompt       string     `json:"prompt"`
-	Error        string     `json:"error"`
-	StartedAt    *time.Time `json:"startedAt"`
-	FinishedAt   *time.Time `json:"finishedAt"`
-	CreatedAt    time.Time  `json:"createdAt"`
+	ID            int64      `json:"id"`
+	CardID        int64      `json:"cardId"`
+	Status        string     `json:"status"` // awaiting_approval | running | succeeded | failed | cancelled
+	SessionID     string     `json:"sessionId"`
+	Branch        string     `json:"branch"`
+	WorktreePath  string     `json:"worktreePath"`
+	BaseRef       string     `json:"baseRef"` // direct mode: shadow commit taken before the run
+	Prompt        string     `json:"prompt"`
+	Error         string     `json:"error"`
+	CostUSD       float64    `json:"costUsd"`
+	InputTokens   int64      `json:"inputTokens"`
+	OutputTokens  int64      `json:"outputTokens"`
+	CacheReadTok  int64      `json:"cacheReadTokens"`
+	CacheWriteTok int64      `json:"cacheCreationTokens"`
+	StartedAt     *time.Time `json:"startedAt"`
+	FinishedAt    *time.Time `json:"finishedAt"`
+	CreatedAt     time.Time  `json:"createdAt"`
+}
+
+// Usage is an aggregate of Claude Code cost/token usage across runs.
+type Usage struct {
+	CostUSD       float64 `json:"costUsd"`
+	InputTokens   int64   `json:"inputTokens"`
+	OutputTokens  int64   `json:"outputTokens"`
+	CacheReadTok  int64   `json:"cacheReadTokens"`
+	CacheWriteTok int64   `json:"cacheCreationTokens"`
+	Runs          int64   `json:"runs"`
+}
+
+// ProjectUsage is a project's share of the total usage.
+type ProjectUsage struct {
+	ProjectID int64  `json:"projectId"`
+	Name      string `json:"name"`
+	Color     string `json:"color"`
+	Usage
+}
+
+// DailyUsage is one day's usage, for a simple trend chart.
+type DailyUsage struct {
+	Date string `json:"date"` // YYYY-MM-DD
+	Usage
 }
 
 type RunEvent struct {
@@ -136,6 +165,11 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE projects ADD COLUMN isolation TEXT NOT NULL DEFAULT 'worktree'`,
 		`ALTER TABLE runs ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE cards ADD COLUMN tags TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, err
@@ -382,11 +416,13 @@ func (s *Store) DeleteCard(id int64) error {
 
 // ---- runs ----
 
-const runSelect = `SELECT id,card_id,status,session_id,branch,worktree_path,base_ref,prompt,error,started_at,finished_at,created_at FROM runs`
+const runSelect = `SELECT id,card_id,status,session_id,branch,worktree_path,base_ref,prompt,error,
+	cost_usd,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,started_at,finished_at,created_at FROM runs`
 
 func scanRun(sc interface{ Scan(...any) error }) (Run, error) {
 	var r Run
-	err := sc.Scan(&r.ID, &r.CardID, &r.Status, &r.SessionID, &r.Branch, &r.WorktreePath, &r.BaseRef, &r.Prompt, &r.Error, &r.StartedAt, &r.FinishedAt, &r.CreatedAt)
+	err := sc.Scan(&r.ID, &r.CardID, &r.Status, &r.SessionID, &r.Branch, &r.WorktreePath, &r.BaseRef, &r.Prompt, &r.Error,
+		&r.CostUSD, &r.InputTokens, &r.OutputTokens, &r.CacheReadTok, &r.CacheWriteTok, &r.StartedAt, &r.FinishedAt, &r.CreatedAt)
 	return r, err
 }
 
@@ -564,4 +600,72 @@ func (s *Store) ListComments(cardID int64) ([]Comment, error) {
 func (s *Store) SetRunBaseRef(id int64, ref string) error {
 	_, err := s.db.Exec(`UPDATE runs SET base_ref=? WHERE id=?`, ref, id)
 	return err
+}
+
+// SetRunUsage stores the cost/token totals Claude Code reported for a run.
+func (s *Store) SetRunUsage(id int64, costUSD float64, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) error {
+	_, err := s.db.Exec(`UPDATE runs SET cost_usd=?,input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=? WHERE id=?`,
+		costUSD, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, id)
+	return err
+}
+
+// scanUsage scans a row whose columns are [leading..., cost, inputTok, outputTok, cacheRead, cacheWrite, count].
+func scanUsage(sc interface{ Scan(...any) error }, leading ...any) (Usage, error) {
+	var u Usage
+	args := append(append([]any{}, leading...), &u.CostUSD, &u.InputTokens, &u.OutputTokens, &u.CacheReadTok, &u.CacheWriteTok, &u.Runs)
+	err := sc.Scan(args...)
+	return u, err
+}
+
+const usageSelect = `COALESCE(SUM(cost_usd),0),COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0),
+	COALESCE(SUM(cache_read_tokens),0),COALESCE(SUM(cache_creation_tokens),0),COUNT(*)`
+
+// GetUsage totals Claude Code cost/tokens across every run that reported them.
+func (s *Store) GetUsage() (Usage, error) {
+	return scanUsage(s.db.QueryRow(`SELECT ` + usageSelect + ` FROM runs WHERE cost_usd > 0 OR input_tokens > 0 OR output_tokens > 0`))
+}
+
+// UsageByProject breaks the totals down per project, highest cost first.
+func (s *Store) UsageByProject() ([]ProjectUsage, error) {
+	rows, err := s.db.Query(`SELECT p.id,p.name,p.color,` + usageSelect + `
+		FROM runs r JOIN cards c ON c.id=r.card_id JOIN projects p ON p.id=c.project_id
+		WHERE r.cost_usd > 0 OR r.input_tokens > 0 OR r.output_tokens > 0
+		GROUP BY p.id ORDER BY SUM(r.cost_usd) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ProjectUsage{}
+	for rows.Next() {
+		var pu ProjectUsage
+		u, err := scanUsage(rows, &pu.ProjectID, &pu.Name, &pu.Color)
+		if err != nil {
+			return nil, err
+		}
+		pu.Usage = u
+		out = append(out, pu)
+	}
+	return out, rows.Err()
+}
+
+// UsageByDay breaks the totals down per day (run creation date), most recent first, capped at n days.
+func (s *Store) UsageByDay(n int) ([]DailyUsage, error) {
+	rows, err := s.db.Query(`SELECT date(created_at),`+usageSelect+`
+		FROM runs WHERE cost_usd > 0 OR input_tokens > 0 OR output_tokens > 0
+		GROUP BY date(created_at) ORDER BY date(created_at) DESC LIMIT ?`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DailyUsage{}
+	for rows.Next() {
+		var du DailyUsage
+		u, err := scanUsage(rows, &du.Date)
+		if err != nil {
+			return nil, err
+		}
+		du.Usage = u
+		out = append(out, du)
+	}
+	return out, rows.Err()
 }
