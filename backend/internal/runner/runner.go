@@ -25,12 +25,13 @@ type Runner struct {
 	dataDir string
 	publish Publisher
 
-	mu      sync.Mutex
-	cancels map[int64]context.CancelFunc // runID -> cancel
-	busy    map[int64]bool               // projectID -> a direct-mode run is editing the folder
-	max     int                          // parallelism limit (see queue.go)
-	running int                          // slots in use
-	queue   []queued                     // runs waiting for a slot (or for their folder), FIFO
+	mu          sync.Mutex
+	cancels     map[int64]context.CancelFunc // runID -> cancel
+	chatCancels map[int64]context.CancelFunc // chatID -> cancel, present while the AI is answering
+	busy        map[int64]bool               // projectID -> a direct-mode run is editing the folder
+	max         int                          // parallelism limit (see queue.go)
+	running     int                          // slots in use
+	queue       []queued                     // runs waiting for a slot (or for their folder), FIFO
 
 	mcpBin, baseURL, token string
 	limitsSink             func(limits.Snapshot)
@@ -56,7 +57,7 @@ func (r *Runner) SetOnReview(fn func(store.Card)) { r.onReview = fn }
 func (r *Runner) SetLimitsSink(fn func(limits.Snapshot)) { r.limitsSink = fn }
 
 func New(s *store.Store, dataDir string, p Publisher) *Runner {
-	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}, max: DefaultMaxParallel}
+	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, chatCancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}, max: DefaultMaxParallel}
 }
 
 func (r *Runner) attachDir(cardID int64) string {
@@ -113,7 +114,7 @@ const promptTmpl = `Você está trabalhando em uma tarefa de um quadro kanban, d
 Regras:
 - Altere apenas o necessário para cumprir a tarefa neste diretório.
 - Rode os testes/build do projeto quando existirem.
-- Ao final, faça commit das mudanças com uma mensagem clara e resuma o que foi feito.`
+- Ao final, faça commit das mudanças com uma mensagem clara e resuma o que foi feito. Se aprendeu algo útil para as próximas tarefas neste projeto (convenções, armadilhas, decisões) que ainda não esteja no CLAUDE.md, inclua no resumo uma sugestão do que adicionar a ele — não edite o CLAUDE.md por conta própria.`
 
 const promptDirectTmpl = `Você está trabalhando em uma tarefa de um quadro kanban, diretamente na pasta do projeto (que não usa git).
 
@@ -124,7 +125,7 @@ const promptDirectTmpl = `Você está trabalhando em uma tarefa de um quadro kan
 Regras:
 - Altere apenas o necessário para cumprir a tarefa.
 - Rode os testes/build do projeto quando existirem.
-- Não inicialize git nem faça commits. Ao final, resuma o que foi feito.`
+- Não inicialize git nem faça commits. Ao final, resuma o que foi feito. Se aprendeu algo útil para as próximas tarefas neste projeto (convenções, armadilhas, decisões) que ainda não esteja no CLAUDE.md, inclua no resumo uma sugestão do que adicionar a ele — não edite o CLAUDE.md por conta própria.`
 
 // Request is called when a card enters "doing" (or the user hits "run").
 // In "approval" mode it parks the run until Approve; in "auto" mode it starts right away.
@@ -248,13 +249,16 @@ func (r *Runner) execute(runID int64) {
 		r.emit(runID, "system", "worktree: "+wt+" ("+branch+")")
 	}
 
-	// resume the previous Claude session for follow-ups on the same card
-	resume := ""
-	if runs, _ := r.store.ListRuns(card.ID); len(runs) > 0 {
-		for _, pr := range runs {
-			if pr.ID != runID && pr.SessionID != "" {
-				resume = pr.SessionID
-				break
+	// resume this run's own session if it was interrupted mid-stream (e.g. a server restart),
+	// otherwise resume the previous Claude session for follow-ups on the same card
+	resume := run.SessionID
+	if resume == "" {
+		if runs, _ := r.store.ListRuns(card.ID); len(runs) > 0 {
+			for _, pr := range runs {
+				if pr.ID != runID && pr.SessionID != "" {
+					resume = pr.SessionID
+					break
+				}
 			}
 		}
 	}

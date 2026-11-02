@@ -53,7 +53,9 @@ func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
 	}
 	srv.runner.SetMax(limit)
 	srv.runner.SetOnReview(srv.reinstallOnReview)
+	srv.runner.Recover() // requeue runs left "running"/"queued" by a previous server process
 	srv.reconcileAcceptedRuns()
+	srv.loadPendingUpdate() // the update banner survives a server restart
 
 	// plan limits: persisted so the panel is not empty after a restart; every run's stream refreshes them
 	srv.limits = limits.NewTracker(
@@ -109,6 +111,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/attachments/{id}", s.deleteAttachment)
 	mux.HandleFunc("GET /api/cards/{id}/comments", s.listComments)
 	mux.HandleFunc("POST /api/cards/{id}/comments", s.addComment)
+
+	mux.HandleFunc("GET /api/projects/{id}/chats", s.listChats)
+	mux.HandleFunc("POST /api/projects/{id}/chats", s.createChat)
+	mux.HandleFunc("PUT /api/chats/{id}", s.updateChat)
+	mux.HandleFunc("DELETE /api/chats/{id}", s.deleteChat)
+	mux.HandleFunc("GET /api/chats/{id}/messages", s.listChatMessages)
+	mux.HandleFunc("POST /api/chats/{id}/messages", s.sendChatMessage)
+	mux.HandleFunc("POST /api/chats/{id}/cancel", s.cancelChat)
 
 	mux.HandleFunc("GET /api/runs/{id}/events", s.runEvents)
 	mux.HandleFunc("POST /api/runs/{id}/approve", s.approveRun)
@@ -390,6 +400,34 @@ type cardBody struct {
 	Tags        *[]string `json:"tags"` // nil = leave tags untouched
 	Model       *string   `json:"model"`
 	Effort      *string   `json:"effort"`
+	DependsOn   *int64    `json:"dependsOn"` // nil = untouched; 0 clears it
+}
+
+// validDependency rejects a self-dependency, a card from another project, or one that would create a cycle.
+func validDependency(s *store.Store, cardID, dependsOn int64) bool {
+	if dependsOn == 0 {
+		return true
+	}
+	if dependsOn == cardID {
+		return false
+	}
+	card, err := s.GetCard(cardID)
+	if err != nil {
+		return false
+	}
+	seen := map[int64]bool{cardID: true}
+	for cur := dependsOn; cur != 0; {
+		if seen[cur] {
+			return false // cycle
+		}
+		dep, err := s.GetCard(cur)
+		if err != nil || dep.ProjectID != card.ProjectID {
+			return false
+		}
+		seen[cur] = true
+		cur = dep.DependsOn
+	}
+	return true
 }
 
 var modelRe = regexp.MustCompile(`^[a-z][a-z0-9.\-\[\]]{0,40}$`) // an alias or a full id; never starts with "-" so it cannot pose as a flag
@@ -486,6 +524,15 @@ func (s *Server) updateCard(w http.ResponseWriter, r *http.Request) {
 			c = mc
 		}
 	}
+	if b.DependsOn != nil && *b.DependsOn != c.DependsOn {
+		if !validDependency(s.store, c.ID, *b.DependsOn) {
+			badRequest(w, "dependência inválida")
+			return
+		}
+		if dc, err := s.store.SetCardDependency(c.ID, *b.DependsOn); err == nil {
+			c = dc
+		}
+	}
 	s.hub.Publish("card", c)
 	writeJSON(w, 200, c)
 }
@@ -515,13 +562,59 @@ func (s *Server) moveCard(w http.ResponseWriter, r *http.Request) {
 		c, _ = s.store.GetCard(c.ID)
 		s.hub.Publish("card", c)
 	}
+	if b.Column == "done" && prev.Column != "done" {
+		s.runner.Recheck() // wakes queued runs whose dependency was this card
+	}
 	writeJSON(w, 200, c)
 }
 
 type pendingUpdate struct {
 	CardID int64  `json:"cardId"`
 	Title  string `json:"title"`
+	Error  string `json:"error,omitempty"` // set when the last install attempt failed; see install.log
 	source string
+}
+
+const settingPendingUpdate = "pending_update"
+
+// pendingUpdateDisk mirrors pendingUpdate but with source exported, so it round-trips through JSON
+// for the settings table (source is kept unexported on pendingUpdate so /api/update never leaks it).
+type pendingUpdateDisk struct {
+	CardID int64  `json:"cardId"`
+	Title  string `json:"title"`
+	Error  string `json:"error,omitempty"`
+	Source string `json:"source"`
+}
+
+// loadPendingUpdate restores a pending update left in the settings table by a previous server process,
+// so the banner (and any failure message) survives a restart instead of only living in memory.
+func (s *Server) loadPendingUpdate() {
+	v, ok := s.store.GetSetting(settingPendingUpdate)
+	if !ok || v == "" {
+		return
+	}
+	var pd pendingUpdateDisk
+	if err := json.Unmarshal([]byte(v), &pd); err != nil || pd.Source == "" {
+		return
+	}
+	if _, err := os.Stat(pd.Source); err != nil {
+		return // the card's worktree is gone; nothing to offer
+	}
+	s.updateMu.Lock()
+	s.update = &pendingUpdate{CardID: pd.CardID, Title: pd.Title, Error: pd.Error, source: pd.Source}
+	s.updateMu.Unlock()
+}
+
+// savePendingUpdate persists s.update (nil clears it). Caller must hold updateMu.
+func (s *Server) savePendingUpdate() {
+	if s.update == nil {
+		_ = s.store.SetSetting(settingPendingUpdate, "")
+		return
+	}
+	pd := pendingUpdateDisk{CardID: s.update.CardID, Title: s.update.Title, Error: s.update.Error, Source: s.update.source}
+	if b, err := json.Marshal(pd); err == nil {
+		_ = s.store.SetSetting(settingPendingUpdate, string(b))
+	}
 }
 
 func (s *Server) getUpdate(w http.ResponseWriter, r *http.Request) {
@@ -530,11 +623,14 @@ func (s *Server) getUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"pending": s.update})
 }
 
-// applyUpdate installs the pending update (the server restarts, so the page has to reconnect).
+// applyUpdate installs the pending update (the server restarts, so the page has to reconnect). The
+// install runs in the background; onResult only fires if it fails before the restart, since success
+// kills this very process.
 func (s *Server) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	s.updateMu.Lock()
 	u := s.update
 	s.update = nil
+	s.savePendingUpdate()
 	s.updateMu.Unlock()
 	root := selfupdate.Root()
 	if u == nil || root == "" {
@@ -547,7 +643,20 @@ func (s *Server) applyUpdate(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "a pasta do card não existe mais")
 		return
 	}
-	selfupdate.Install(root, u.source, s.dataDir)
+	cardID, title, source := u.CardID, u.Title, u.source
+	selfupdate.Install(root, source, s.dataDir, func(err error) {
+		log.Printf("auto-install: falhou: %v", err)
+		msg := selfupdate.LogTail(s.dataDir, 4000)
+		if msg == "" {
+			msg = err.Error()
+		}
+		s.updateMu.Lock()
+		s.update = &pendingUpdate{CardID: cardID, Title: title, Error: msg, source: source}
+		s.savePendingUpdate()
+		pending := s.update
+		s.updateMu.Unlock()
+		s.hub.Publish("update", map[string]any{"pending": pending})
+	})
 	writeJSON(w, 202, map[string]bool{"ok": true})
 }
 
@@ -565,6 +674,7 @@ func (s *Server) reinstallOnReview(c store.Card) {
 	}
 	s.updateMu.Lock()
 	s.update = &pendingUpdate{CardID: c.ID, Title: c.Title, source: source}
+	s.savePendingUpdate()
 	s.updateMu.Unlock()
 	s.hub.Publish("update", map[string]any{"pending": map[string]any{"cardId": c.ID, "title": c.Title}})
 }
@@ -580,6 +690,7 @@ func (s *Server) deleteCard(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = os.RemoveAll(s.attachDir(id)) // path is built from the numeric id only
 	s.hub.Publish("card_deleted", map[string]int64{"id": id})
+	s.runner.Recheck() // unblocks runs that depended on the deleted card
 	w.WriteHeader(204)
 }
 
@@ -644,20 +755,30 @@ func (s *Server) listComments(w http.ResponseWriter, r *http.Request) {
 }
 
 // addComment stores a comment and refreshes the card (its comment count changed).
+// A comment tied to a run's diff line carries runId/file/line (see DiffView.tsx).
 func (s *Server) addComment(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Body   string `json:"body"`
 		Author string `json:"author"`
+		RunID  int64  `json:"runId"`
+		File   string `json:"file"`
+		Line   int    `json:"line"`
 	}
 	if decode(r, &b) != nil || strings.TrimSpace(b.Body) == "" {
 		badRequest(w, "comentário vazio")
 		return
 	}
-	c, err := s.comment(pathID(r), b.Author, strings.TrimSpace(b.Body))
+	cardID := pathID(r)
+	if _, err := s.store.GetCard(cardID); err != nil {
+		fail(w, err)
+		return
+	}
+	c, err := s.store.AddLineComment(cardID, b.Author, strings.TrimSpace(b.Body), b.RunID, b.File, b.Line)
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	s.publishComment(c)
 	writeJSON(w, 201, c)
 }
 
@@ -669,11 +790,15 @@ func (s *Server) comment(cardID int64, author, body string) (store.Comment, erro
 	if err != nil {
 		return c, err
 	}
+	s.publishComment(c)
+	return c, nil
+}
+
+func (s *Server) publishComment(c store.Comment) {
 	s.hub.Publish("comment", c)
-	if card, err := s.store.GetCard(cardID); err == nil {
+	if card, err := s.store.GetCard(c.CardID); err == nil {
 		s.hub.Publish("card", card)
 	}
-	return c, nil
 }
 
 // ---- runs ----
@@ -753,6 +878,10 @@ func (s *Server) runDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mergeRun(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Force bool `json:"force"`
+	}
+	_ = decode(r, &b)
 	run, card, p, err := s.runContext(r)
 	if err != nil {
 		fail(w, err)
@@ -761,6 +890,16 @@ func (s *Server) mergeRun(w http.ResponseWriter, r *http.Request) {
 	if run.Status != "succeeded" {
 		badRequest(w, "só é possível aceitar uma execução concluída")
 		return
+	}
+	if !b.Force {
+		dir := p.Path
+		if p.Isolation != "direct" && run.WorktreePath != "" {
+			dir = run.WorktreePath
+		}
+		if output, ok := runner.Verify(dir); !ok {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "testes/build do projeto falharam", "output": output})
+			return
+		}
 	}
 	// direct mode: the changes are already in the folder, accepting just closes the card
 	if p.Isolation != "direct" {

@@ -4,44 +4,88 @@
 # -NoOpen: não abre o navegador (usado na atualização automática ao entrar em revisão).
 param([string]$Source = $PSScriptRoot, [switch]$NoOpen)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'install-helpers.ps1')
 $root = $PSScriptRoot
 $bin = Join-Path $root 'backend\bin'
 $server = Join-Path $bin 'kanban-server.exe'
 $stage = Join-Path $bin 'staging'
 $data = Join-Path $env:APPDATA 'kanban-board'
-$port = if ($env:KB_ADDR -match ':(\d+)$') { $Matches[1] } else { '7777' }
+$port = Get-ConfiguredPort $env:KB_ADDR
 
-# 1. compila numa pasta temporária: o servidor atual segue no ar durante o build
+# 1. compila numa pasta temporária e valida tudo: o servidor atual segue no ar durante o build,
+#    e só é parado depois que sabemos que frontend e backend compilam e geram os 3 executáveis.
 New-Item -ItemType Directory -Force $stage | Out-Null
-Push-Location (Join-Path $Source 'frontend')
-if (-not (Test-Path node_modules)) { npm install }
-npm run build
-Pop-Location
-Push-Location (Join-Path $Source 'backend')
-go build -o "$stage\kb.exe" .\cmd\kb
-go build -o "$stage\cardume.exe" .\cmd\kb
-go build -ldflags '-H=windowsgui' -o "$stage\kanban-server.exe" .\cmd\server
-Pop-Location
+try {
+    Push-Location (Join-Path $Source 'frontend')
+    if (-not (Test-Path node_modules)) {
+        npm install
+        if ($LASTEXITCODE -ne 0) { throw "npm install falhou (exit $LASTEXITCODE)" }
+    }
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "npm run build falhou (exit $LASTEXITCODE)" }
+    Pop-Location
+    Push-Location (Join-Path $Source 'backend')
+    go build -o "$stage\kb.exe" .\cmd\kb
+    if ($LASTEXITCODE -ne 0) { throw "go build kb.exe falhou (exit $LASTEXITCODE)" }
+    go build -o "$stage\cardume.exe" .\cmd\kb
+    if ($LASTEXITCODE -ne 0) { throw "go build cardume.exe falhou (exit $LASTEXITCODE)" }
+    go build -ldflags '-H=windowsgui' -o "$stage\kanban-server.exe" .\cmd\server
+    if ($LASTEXITCODE -ne 0) { throw "go build kanban-server.exe falhou (exit $LASTEXITCODE)" }
+    Pop-Location
+    foreach ($name in 'kb.exe', 'cardume.exe', 'kanban-server.exe') {
+        $p = Join-Path $stage $name
+        if (-not (Test-Path $p) -or (Get-Item $p).Length -eq 0) { throw "$name não foi gerado" }
+    }
+} catch {
+    # desfaz os Push-Location pendentes (frontend e/ou backend), sem erro se já não houver nenhum
+    try { Pop-Location -ErrorAction Stop } catch {}
+    try { Pop-Location -ErrorAction Stop } catch {}
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Error "Build falhou, nada foi alterado (servidor em execução continua no ar): $_"
+}
 
-# 2. troca: para o servidor (só o nosso, pelo nome), confere a porta e copia os executáveis novos
+# 2. troca: para o servidor (só o nosso, pelo nome), confere a porta e copia os executáveis novos.
+#    Se algo falhar daqui pra frente, os .exe antigos são restaurados e o servidor antigo volta a subir.
+$oldServerWasRunning = [bool](Get-Process -Name 'kanban-server' -ErrorAction SilentlyContinue)
 Get-Process -Name 'kanban-server' -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
+
+function Restart-OldServer {
+    if ($oldServerWasRunning -and (Test-Path $server)) {
+        Start-Process -FilePath $server -WindowStyle Hidden -ErrorAction SilentlyContinue
+    }
+}
+
 $busy = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if ($busy) {
     $owner = (Get-Process -Id $busy[0].OwningProcess -ErrorAction SilentlyContinue).ProcessName
+    Restart-OldServer
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Write-Error "A porta $port está em uso por '$owner'. Se for o start.ps1 antigo, feche aquele terminal (Ctrl+C) e rode de novo."
 }
 # um .exe em uso não pode ser sobrescrito, mas pode ser renomeado: o antigo vira .old
 # (um .old ainda em uso, ex.: kb.exe mcp de uma execução, não some: o próximo ganha outro nome)
 Get-ChildItem $bin -Filter '*.old*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-foreach ($f in Get-ChildItem $stage -Filter '*.exe') {
-    $dest = Join-Path $bin $f.Name
-    if (Test-Path $dest) {
-        $old = "$dest.old"
-        if (Test-Path $old) { $old = "$dest.old$(Get-Date -Format 'HHmmssfff')" }
-        Move-Item -Force $dest $old
+$moved = @()
+try {
+    foreach ($f in Get-ChildItem $stage -Filter '*.exe') {
+        $dest = Join-Path $bin $f.Name
+        if (Test-Path $dest) {
+            $oldName = Get-OldExeName $dest
+            Move-Item -Force $dest $oldName
+            $moved += [pscustomobject]@{ Dest = $dest; Old = $oldName }
+        }
+        Move-Item $f.FullName $dest
     }
-    Move-Item $f.FullName $dest
+} catch {
+    Write-Host "Falha ao trocar os executáveis, restaurando a versão anterior..." -ForegroundColor Yellow
+    foreach ($m in $moved) {
+        Remove-Item $m.Dest -Force -ErrorAction SilentlyContinue
+        Move-Item -Force $m.Old $m.Dest -ErrorAction SilentlyContinue
+    }
+    Restart-OldServer
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Error "Erro ao trocar os executáveis, versão anterior restaurada e servidor religado: $_"
 }
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -50,9 +94,7 @@ Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Na
 
 # 3b. o comando `cardume` em qualquer terminal novo: coloca backend\bin no PATH do usuário
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if (($userPath -split ';') -notcontains $bin) {
-    [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';'), $bin) -join ';'), 'User')
-}
+[Environment]::SetEnvironmentVariable('Path', (Add-UserPathEntry $userPath $bin), 'User')
 
 # 4. inicia agora, sem janela
 Start-Process -FilePath $server -WindowStyle Hidden

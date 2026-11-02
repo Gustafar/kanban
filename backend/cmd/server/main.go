@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"kanban_board/internal/api"
 	"kanban_board/internal/store"
@@ -80,6 +81,27 @@ func kbBinary() string {
 	return p
 }
 
+// backupLoop snapshots the database into dir/backups on an interval (KB_BACKUP_INTERVAL, default 24h),
+// starting with one immediate backup so a fresh install is covered too.
+func backupLoop(st *store.Store, dir string) {
+	interval := 24 * time.Hour
+	if v := os.Getenv("KB_BACKUP_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		}
+	}
+	backupDir := filepath.Join(dir, "backups")
+	run := func() {
+		if err := st.Backup(backupDir); err != nil {
+			log.Printf("backup: falhou: %v", err)
+		}
+	}
+	run()
+	for range time.Tick(interval) {
+		run()
+	}
+}
+
 func lanIPs() []string {
 	var out []string
 	addrs, _ := net.InterfaceAddrs()
@@ -103,7 +125,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.MarkInterruptedRuns()
+	go backupLoop(st, dir)
 
 	token := loadToken(dir)
 	srv, _ := api.New(st, dir, token, web.FS())

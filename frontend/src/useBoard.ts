@@ -8,6 +8,8 @@ function upsert<T extends { id: number }>(list: T[], item: T): T[] {
   return list.some(x => x.id === item.id) ? list.map(x => (x.id === item.id ? item : x)) : [...list, item]
 }
 
+const MAX_NOTICES = 50
+
 export type BoardListener = (type: string, data: any) => void
 
 // One SSE connection feeds projects, the open project's cards, live lines, runs and notices.
@@ -17,18 +19,25 @@ export function useBoard() {
   const [cards, setCards] = useState<Card[]>([])
   const [live, setLive] = useState<Live>({})
   const [notices, setNotices] = useState<Notice[]>([])
-  const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [online, setOnline] = useState(true)
   const [status, setStatus] = useState<ServerStatus>({ max: 2, running: 0, queued: 0 })
   const [limits, setLimits] = useState<Limits | null>(null)
-  const [update, setUpdate] = useState<{ cardId: number; title: string } | null>(null)
+  const [update, setUpdate] = useState<{ cardId: number; title: string; error?: string } | null>(null)
 
   const projectIdRef = useRef<number | null>(null)
   projectIdRef.current = projectId
   const runToCard = useRef(new Map<number, number>())
   const listeners = useRef(new Set<BoardListener>())
   const noticeSeq = useRef(0)
+
+  // the notification center keeps the latest entries until the user dismisses them
+  const addNotice = useCallback((n: Pick<Notice, 'kind' | 'title' | 'body' | 'cardId'>) => {
+    setNotices(l => [{ ...n, id: ++noticeSeq.current, at: Date.now(), read: false }, ...l].slice(0, MAX_NOTICES))
+  }, [])
+  const setError = useCallback((message: string) => {
+    if (message) addNotice({ kind: 'error', title: 'Algo deu errado', body: message })
+  }, [addNotice])
 
   const loadProjects = useCallback(async () => {
     const ps = await api.projects()
@@ -92,17 +101,12 @@ export function useBoard() {
         case 'status': setStatus(data); break
         case 'limits': setLimits(data); break
         case 'update': setUpdate(data.pending); break
-        case 'notify': {
-          const n = { ...data, id: ++noticeSeq.current } as Notice
-          setNotices(l => [...l, n])
-          setTimeout(() => setNotices(l => l.filter(x => x.id !== n.id)), 8000)
-          break
-        }
+        case 'notify': addNotice(data); break
       }
       listeners.current.forEach(fn => fn(type, data))
     }
     return () => es.close()
-  }, [loadCards, loadProjects])
+  }, [loadCards, loadProjects, addNotice])
 
   // keep the sidebar usage meters current without the user opening the usage panel
   useEffect(() => {
@@ -115,11 +119,13 @@ export function useBoard() {
     return () => { listeners.current.delete(fn) }
   }, [])
 
-  const dismissNotice = (id: number) => setNotices(l => l.filter(n => n.id !== id))
+  const dismissNotice = useCallback((id: number) => setNotices(l => l.filter(n => n.id !== id)), [])
+  const clearNotices = useCallback(() => setNotices([]), [])
+  const markNoticesRead = useCallback(() => setNotices(l => (l.some(n => !n.read) ? l.map(n => ({ ...n, read: true })) : l)), [])
 
   return {
     update,
-    projects, projectId, setProjectId, cards, setCards, live, notices, dismissNotice,
-    error, setError, loaded, online, status, setStatus, limits, setLimits, subscribe, reloadProjects: loadProjects,
+    projects, projectId, setProjectId, cards, setCards, live, notices, dismissNotice, clearNotices, markNoticesRead,
+    setError, loaded, online, status, setStatus, limits, setLimits, subscribe, reloadProjects: loadProjects,
   }
 }

@@ -15,10 +15,12 @@ type Status struct {
 	Queued  int `json:"queued"`
 }
 
-// queued is a run waiting to start; direct runs must also win their project's folder.
+// queued is a run waiting to start; direct runs must also win their project's folder,
+// and a run with a dependency must wait for that card to reach "done".
 type queued struct {
 	runID, projectID int64
 	direct           bool
+	dependsOn        int64
 }
 
 func (r *Runner) Status() Status {
@@ -40,10 +42,23 @@ func (r *Runner) queueInfo(runID int64) queued {
 	if err != nil {
 		return q
 	}
+	q.dependsOn = card.DependsOn
 	if p, err := r.store.GetProject(card.ProjectID); err == nil {
 		q.projectID, q.direct = p.ID, p.Isolation == "direct"
 	}
 	return q
+}
+
+// dependencyMet reports whether a run can start: it has no dependency, or that card already reached "done".
+func (r *Runner) dependencyMet(dependsOn int64) bool {
+	if dependsOn == 0 {
+		return true
+	}
+	c, err := r.store.GetCard(dependsOn)
+	if err != nil {
+		return true // the dependency was deleted: nothing left to wait for
+	}
+	return c.Column == "done"
 }
 
 // popStartableLocked removes and returns the first queued run whose folder is free, reserving the folder.
@@ -51,6 +66,9 @@ func (r *Runner) queueInfo(runID int64) queued {
 func (r *Runner) popStartableLocked() (queued, bool) {
 	for i, q := range r.queue {
 		if q.direct && r.busy[q.projectID] {
+			continue
+		}
+		if !r.dependencyMet(q.dependsOn) {
 			continue
 		}
 		r.queue = append(r.queue[:i], r.queue[i+1:]...)
@@ -82,6 +100,23 @@ func (r *Runner) startWaiting() {
 	}
 }
 
+// Recheck starts queued runs whose dependency card just reached "done" (or was deleted).
+func (r *Runner) Recheck() { r.startWaiting() }
+
+// Recover requeues runs left "running" or "queued" by a previous server process: the queue itself
+// lives only in memory, so a restart would otherwise strand them forever. Call once at startup,
+// after SetMax. Interrupted runs resume their own Claude session (see execute's --resume handling).
+func (r *Runner) Recover() {
+	runs, err := r.store.ResetInterruptedRuns()
+	if err != nil {
+		return
+	}
+	for _, run := range runs {
+		r.emit(run.ID, "system", "servidor reiniciado: execução reenfileirada")
+		r.schedule(run.ID)
+	}
+}
+
 // SetMax changes the limit; a higher limit immediately starts waiting runs.
 func (r *Runner) SetMax(n int) {
 	if n < 1 {
@@ -101,7 +136,7 @@ func (r *Runner) SetMax(n int) {
 func (r *Runner) schedule(runID int64) {
 	q := r.queueInfo(runID)
 	r.mu.Lock()
-	if r.running < r.max && !(q.direct && r.busy[q.projectID]) {
+	if r.running < r.max && !(q.direct && r.busy[q.projectID]) && r.dependencyMet(q.dependsOn) {
 		r.running++
 		if q.direct {
 			r.busy[q.projectID] = true

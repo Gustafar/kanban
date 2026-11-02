@@ -8,8 +8,10 @@ import { ContextMenu } from './components/ContextMenu'
 import type { MenuItem } from './components/ContextMenu'
 import { useConfirm } from './components/ConfirmDialog'
 import { Modal, NewCardDialog, ProjectDialog } from './components/Dialogs'
-import { Bell, Gear, Logo, Plus, Search, SidebarToggle } from './components/Icons'
+import { ChatPanel } from './components/ChatPanel'
+import { Bell, Chat, Gear, Logo, Plus, Search, SidebarToggle } from './components/Icons'
 import { MiniLimits } from './components/LimitMeters'
+import { NotificationCenter } from './components/NotificationCenter'
 import { QuickBar } from './components/QuickBar'
 import { UsageDialog } from './components/UsageDialog'
 import { COLUMNS } from './types'
@@ -29,7 +31,7 @@ const matchesFilter = (c: Card, f: Filter) =>
   (f === 'running' ? c.runStatus === 'running' : c.runStatus === 'awaiting_approval' || c.runStatus === 'failed' || c.column === 'review')
 
 const SHORTCUTS: [string, string][] = [
-  ['n', 'Escrever uma tarefa (barra de baixo)'], ['Enter', 'Criar o card na barra (Shift+Enter quebra a linha)'], ['/', 'Buscar'], ['1 – 9', 'Trocar de projeto'], ['Esc', 'Fechar card ou limpar busca'], ['?', 'Mostrar atalhos'],
+  ['n', 'Escrever uma tarefa (barra de baixo)'], ['Enter', 'Criar o card na barra (Shift+Enter quebra a linha)'], ['/', 'Buscar'], ['1 – 9', 'Trocar de projeto'], ['b', 'Minimizar/mostrar a barra lateral'], ['c', 'Conversar com a IA sobre o projeto'], ['Esc', 'Fechar card ou limpar busca'], ['?', 'Mostrar atalhos'],
 ]
 
 const canNotify = typeof Notification !== 'undefined' && window.isSecureContext
@@ -37,6 +39,7 @@ const canNotify = typeof Notification !== 'undefined' && window.isSecureContext
 export default function App() {
   const b = useBoard()
   const [openCard, setOpenCard] = useState<number | null>(null)
+  const [chatOpen, setChatOpen] = useState(false)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [perm, setPerm] = useState(canNotify ? Notification.permission : 'denied')
   const [menu, setMenu] = useState<{ card: Card; x: number; y: number } | null>(null)
@@ -76,11 +79,15 @@ export default function App() {
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus() }
       else if (e.key === 'n' && project) { e.preventDefault(); quickRef.current?.focus() }
       else if (e.key === '?') setDialog({ kind: 'help' })
+      else if (e.key === 'b') toggleRail()
+      else if (e.key === 'c' && project) { e.preventDefault(); setOpenCard(null); setChatOpen(true) }
       else if (/^[1-9]$/.test(e.key) && projects[+e.key - 1]) { setProjectId(projects[+e.key - 1].id); setOpenCard(null) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [project, projects, setProjectId])
+  }, [project, projects, setProjectId, toggleRail])
+
+  useEffect(() => { if (openCard != null) setChatOpen(false) }, [openCard]) // one drawer at a time
 
   useEffect(() => { document.title = project ? `${project.name} · Kanban` : 'Kanban' }, [project])
 
@@ -93,13 +100,23 @@ export default function App() {
 
   const { setError } = b
   const [updating, setUpdating] = useState(false)
+  // the poll below closes over this render's `b.update`; a ref keeps it current across ticks
+  const updateRef = useRef(b.update)
+  useEffect(() => { updateRef.current = b.update }, [b.update])
   async function applyUpdate() {
     setUpdating(true)
     try { await api.applyUpdate() } catch (e) { setUpdating(false); setError((e as Error).message); return }
-    // the server stays up while building and goes down only for the swap: reload once it is back
+    // the server stays up while building and goes down only for the swap: reload once it is back.
+    // if the build fails before that point the server survives and reports the error over SSE instead.
     const started = Date.now()
     let down = false
     const poll = setInterval(async () => {
+      if (updateRef.current?.error) {
+        clearInterval(poll)
+        setUpdating(false)
+        setError(`Falha ao atualizar: ${updateRef.current.error}`)
+        return
+      }
       const ok = await fetch('/api/status').then(r => r.ok).catch(() => false)
       if (!ok) down = true
       if ((ok && down) || Date.now() - started > 5 * 60_000) { clearInterval(poll); location.reload() }
@@ -199,6 +216,11 @@ export default function App() {
                 {canNotify && perm === 'default' && (
                   <button className="btn ghost" onClick={() => Notification.requestPermission().then(setPerm)}><Bell /><span className="btn-label">Ativar avisos</span></button>
                 )}
+                <NotificationCenter
+                  notices={b.notices} online={b.online} update={b.update} updating={updating}
+                  onApplyUpdate={applyUpdate} onOpenCard={setOpenCard} onDismiss={b.dismissNotice} onClear={b.clearNotices} onRead={b.markNoticesRead}
+                />
+                <button className="btn" onClick={() => { setOpenCard(null); setChatOpen(true) }} title="Conversar com a IA sobre este projeto (c)"><Chat /><span className="btn-label">Conversar</span></button>
                 <button className="icon-btn" onClick={() => setDialog({ kind: 'project', edit: true })} aria-label="Configurar projeto"><Gear /></button>
                 <button className="btn primary" onClick={() => setDialog({ kind: 'card', column: 'backlog' })}><Plus />Novo card</button>
               </div>
@@ -242,7 +264,9 @@ export default function App() {
         )}
       </main>
 
-      {card && project && <CardDrawer key={card.id} card={card} project={project} subscribe={b.subscribe} onClose={() => setOpenCard(null)} onError={onError} />}
+      {card && project && <CardDrawer key={card.id} card={card} project={project} cards={b.cards} subscribe={b.subscribe} onClose={() => setOpenCard(null)} onError={onError} />}
+
+      {chatOpen && project && <ChatPanel key={project.id} project={project} subscribe={b.subscribe} onClose={() => setChatOpen(false)} onError={onError} />}
 
       {dialog?.kind === 'card' && project && <NewCardDialog project={project} column={dialog.column} onClose={() => setDialog(null)} onError={onError} />}
       {dialog?.kind === 'usage' && <UsageDialog limits={b.limits} onLimits={b.setLimits} onClose={() => setDialog(null)} onError={onError} />}
@@ -264,22 +288,6 @@ export default function App() {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.card)} onClose={() => setMenu(null)} />}
 
-      <div className="toasts" aria-live="polite">
-        {!b.online && <div className="toast warn">Sem conexão com o servidor. Tentando reconectar…</div>}
-        {b.error && <div className="toast err" role="alert">{b.error}<button onClick={() => b.setError('')} aria-label="Dispensar">×</button></div>}
-        {b.update && (
-          <div className="toast update" role="status">
-            <strong>Novas atualizações</strong>
-            <span>{updating ? 'Atualizando… o app reinicia em instantes.' : `Do card “${b.update.title || 'sem título'}”.`}</span>
-            <button onClick={applyUpdate} disabled={updating}>{updating ? 'Atualizando…' : 'Atualizar'}</button>
-          </div>
-        )}
-        {b.notices.map(n => (
-          <button key={n.id} className="toast note" data-kind={n.kind} onClick={() => { setOpenCard(n.cardId); b.dismissNotice(n.id) }}>
-            <strong>{n.title}</strong><span>{n.body}</span>
-          </button>
-        ))}
-      </div>
     </div>
   )
 }

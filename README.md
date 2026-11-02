@@ -71,7 +71,7 @@ The button at the right of the sidebar header collapses it; when collapsed, the 
 
 ## Updating the app from a card
 
-When a card from this very repository enters review, the app offers "New updates". The button rebuilds the app from that card's worktree and restarts it, so you can try the change in the real app. The pending update lives in memory; if the server restarts it is lost. Installer output goes to `%APPDATA%\kanban-board\install.log`.
+When a card from this very repository enters review, the app offers "New updates". The button rebuilds the app from that card's worktree and restarts it, so you can try the change in the real app. The pending update is persisted (settings table), so it survives a server restart. Installer output goes to `%APPDATA%\kanban-board\install.log`; if the build fails before the restart, the server stays up and shows the error (a tail of that log) with a "Try again" button instead of leaving the UI waiting.
 
 ## CLI
 
@@ -96,6 +96,7 @@ claude mcp add kanban --scope user -- C:\Projetos\kanban_board\backend\bin\kb.ex
 | `KB_DATA` | `%APPDATA%\kanban-board` |
 | `KB_TOKEN` | generated and saved on first start |
 | `KB_ALLOWED_TOOLS` | `Bash,Edit,Write,Read,Glob,Grep` (tools allowed for Claude in worktrees) |
+| `KB_BACKUP_INTERVAL` | `24h` (how often `kanban.db` is snapshotted into `backups/`; keeps the last 14) |
 
 ## Development
 

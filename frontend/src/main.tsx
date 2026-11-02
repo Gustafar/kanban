@@ -8,6 +8,7 @@ import './styles.css'
 import './detail.css'
 import './popover.css'
 import './dialogs.css'
+import './chat.css'
 import { ConfirmProvider } from './components/ConfirmDialog'
 
 createRoot(document.getElementById('root')!).render(

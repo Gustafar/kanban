@@ -265,6 +265,9 @@ kbd { display: inline-block; padding: 1px 7px; border: 1px solid var(--line-stro
 .queue-note { flex: 1 1 100%; font-size: 13px; }
 .branch { display: inline-flex; align-items: center; gap: 5px; font: 12px var(--font-mono); color: var(--slate); overflow-wrap: anywhere; }
 .run-error { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--rose-soft); color: var(--rose); font-size: 13px; overflow-wrap: anywhere; }
+.verify-fail { display: grid; gap: 8px; }
+.verify-fail pre { margin: 0; max-height: 160px; overflow: auto; white-space: pre-wrap; font: 11.5px/1.4 var(--font-mono); color: var(--ink); }
+.verify-fail .actions { justify-content: flex-end; }
 .followup { display: flex; gap: 8px; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
@@ -377,17 +380,6 @@ kbd { display: inline-block; padding: 1px 7px; border: 1px solid var(--line-stro
 .usage-days li { flex: 1; height: 100%; display: flex; align-items: flex-end; }
 .usage-days i { display: block; width: 100%; border-radius: 2px 2px 0 0; background: var(--accent); }
 
-/* ---------- toasts ---------- */
-.toasts { position: fixed; z-index: 40; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); display: grid; gap: 8px; width: min(340px, calc(100vw - 32px)); }
-.toast { display: grid; gap: 2px; padding: 12px 14px; border-radius: 12px; background: var(--ink); color: var(--bg); text-align: left; border: 0; box-shadow: var(--shadow); position: relative; }
-.toast.err { background: var(--rose); color: #fff; padding-right: 34px; }
-.toast.err button { position: absolute; right: 8px; top: 6px; border: 0; background: none; color: inherit; font-size: 20px; }
-.toast.warn { background: var(--amber); color: #1b1300; }
-.toast.note span { opacity: 0.8; }
-.toast.note[data-kind='failed'] { background: var(--rose); color: #fff; }
-.toast.note[data-kind='warn'] { background: var(--amber); color: #1b1300; }
-.toast.note[data-kind='succeeded'] { background: var(--moss); color: #04170d; }
-
 /* ---------- responsive ---------- */
 @media (max-width: 900px) {
   body { overflow: auto; }
@@ -427,11 +419,6 @@ kbd { display: inline-block; padding: 1px 7px; border: 1px solid var(--line-stro
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
-
-.toast.update { background: var(--ink); color: var(--bg); gap: 4px; }
-.toast.update span { opacity: 0.8; }
-.toast.update button { justify-self: start; margin-top: 6px; border: 0; border-radius: 8px; padding: 6px 14px; font-weight: 600; background: var(--accent, #6c63ff); color: #fff; }
-.toast.update button:disabled { opacity: 0.6; }
 
 /* Slim, rounded scrollbars that only light up on hover. */
 * {

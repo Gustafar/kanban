@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import type { BoardListener } from '../useBoard'
 import { COLUMNS, isImage } from '../types'
 import type { Attachment, Card, Comment, Mode, Project, Run, RunEvent } from '../types'
@@ -15,6 +15,7 @@ import { Steps } from './Steps'
 interface Props {
   card: Card
   project: Project
+  cards: Card[]
   subscribe: (fn: BoardListener) => () => void
   onClose: () => void
   onError: (m: string) => void
@@ -61,7 +62,18 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
   )
 }
 
-export function CardDrawer({ card, project, subscribe, onClose, onError }: Props) {
+// walks `candidate`'s dependency chain to see if it eventually points back to `cardId` (would create a cycle)
+function wouldCycle(cards: Card[], cardId: number, candidate: number): boolean {
+  const seen = new Set<number>()
+  for (let cur = candidate; cur; ) {
+    if (cur === cardId || seen.has(cur)) return true
+    seen.add(cur)
+    cur = cards.find(c => c.id === cur)?.dependsOn ?? 0
+  }
+  return false
+}
+
+export function CardDrawer({ card, project, cards, subscribe, onClose, onError }: Props) {
   const [title, setTitle] = useState(card.title)
   const [description, setDescription] = useState(card.description)
   const [mode, setMode] = useState<Mode>(card.mode)
@@ -80,6 +92,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   const [draft, setDraft] = useState('')
   const [composer, setComposer] = useState<Composer>('comment')
   const [busy, setBusy] = useState(false)
+  const [verifyFail, setVerifyFail] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const confirm = useConfirm()
 
@@ -134,8 +147,19 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   useEffect(() => { api.attachments(card.id).then(setFiles).catch(() => {}) }, [card.id])
   useEffect(() => {
     setEvents([])
+    setVerifyFail(null)
     if (runId != null) api.events(runId).then(setEvents).catch(() => {})
   }, [runId])
+
+  const doMerge = useCallback((force: boolean) => guard(async () => {
+    try {
+      await api.merge(run!.id, force)
+      setVerifyFail(null)
+    } catch (e) {
+      if (e instanceof ApiError && e.output !== undefined) { setVerifyFail(e.output || e.message); return }
+      throw e
+    }
+  }), [guard, run])
 
   useEffect(() => subscribe((type, data) => {
     if (type === 'run' && data.cardId === card.id) {
@@ -160,6 +184,13 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   const status = run?.status
   const finished = status === 'succeeded'
   const direct = project.isolation === 'direct'
+
+  const dependencyOptions = useMemo(
+    () => cards.filter(c => c.id !== card.id && !wouldCycle(cards, card.id, c.id)),
+    [cards, card.id],
+  )
+  const dependency = cards.find(c => c.id === card.dependsOn)
+  const blocked = !!dependency && dependency.column !== 'done'
 
   // comments and run markers share one chronological thread
   const timeline = useMemo(() => {
@@ -266,6 +297,20 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
             )}
 
             <div className="field-block">
+              <div className="field-title">Depende de <small>só roda depois que o outro card chegar em "Concluído"</small></div>
+              <select
+                className="dependency-picker" disabled={busy} value={card.dependsOn || ''} aria-label="Depende de"
+                onChange={e => void guard(() => api.updateCard(card.id, { title: card.title, description: card.description, mode: card.mode, dependsOn: e.target.value ? Number(e.target.value) : 0 }))}
+              >
+                <option value="">Nenhuma</option>
+                {dependencyOptions.map(c => (
+                  <option key={c.id} value={c.id}>{c.title || `#${c.id}`}</option>
+                ))}
+              </select>
+              {blocked && <p className="muted queue-note">Aguardando "{dependency!.title || `#${dependency!.id}`}" chegar em Concluído antes de executar.</p>}
+            </div>
+
+            <div className="field-block">
               <div className="field-title">Execução</div>
               <ModeToggle value={mode} onChange={setMode} />
             </div>
@@ -293,6 +338,16 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
                 <p className="run-meta">{[took(run) && `Durou ${took(run)}`, run.costUsd > 0 && money(run.costUsd), events.length > 0 && `${events.length} passos`].filter(Boolean).join(' · ')}</p>
               )}
               {run?.error && <p className="run-error">{run.error}</p>}
+              {verifyFail != null && (
+                <div className="run-error verify-fail">
+                  <b>Testes/build do projeto falharam</b>
+                  {verifyFail && <pre>{verifyFail}</pre>}
+                  <div className="actions">
+                    <button className="btn ghost" disabled={busy} onClick={() => setTab('diff')}>Ver mudanças</button>
+                    <button className="btn danger" disabled={busy} onClick={() => doMerge(true)}>Aceitar mesmo assim</button>
+                  </div>
+                </div>
+              )}
 
               <div className="actions wrap">
                 {status === 'awaiting_approval' && <>
@@ -303,11 +358,15 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
                 </>}
                 {status === 'running' && <button className="btn danger" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Parar execução</button>}
                 {status === 'queued' && <>
-                  <span className="muted queue-note">Na fila: as vagas estão ocupadas ou outra execução está editando a mesma pasta. Começa sozinha assim que possível.</span>
+                  <span className="muted queue-note">
+                    {blocked
+                      ? `Na fila: aguardando "${dependency!.title || `#${dependency!.id}`}" chegar em Concluído.`
+                      : 'Na fila: as vagas estão ocupadas ou outra execução está editando a mesma pasta. Começa sozinha assim que possível.'}
+                  </span>
                   <button className="btn ghost" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Sair da fila</button>
                 </>}
                 {finished && <>
-                  <button className="btn primary" disabled={busy} onClick={() => guard(() => api.merge(run!.id))}>{direct ? 'Aceitar mudanças' : 'Fazer merge na branch atual'}</button>
+                  <button className="btn primary" disabled={busy} onClick={() => doMerge(false)}>{direct ? 'Aceitar mudanças' : 'Fazer merge na branch atual'}</button>
                   <button className="btn ghost" disabled={busy} onClick={async () => {
                     const ok = await confirm(direct
                       ? { title: 'Desfazer na pasta?', message: 'A pasta volta ao estado de antes desta execução. Qualquer alteração feita nela depois disso, inclusive por você, também será desfeita.', confirmLabel: 'Desfazer', danger: true }
@@ -358,7 +417,13 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
                 </ol>
               )}
               {tab === 'steps' && run && <Steps events={events} awaiting={status === 'awaiting_approval'} />}
-              {tab === 'diff' && run && <DiffView diff={diff} direct={direct} />}
+              {tab === 'diff' && run && (
+                <DiffView
+                  diff={diff} direct={direct} busy={busy}
+                  comments={comments.filter(c => c.runId === run.id)}
+                  onComment={(file, line, body) => guard(() => api.addComment(card.id, body, { runId: run.id, file, line }))}
+                />
+              )}
             </div>
 
             <form className="composer" onSubmit={e => { e.preventDefault(); send() }}>

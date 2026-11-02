@@ -32,8 +32,10 @@ func SamePath(a, b string) bool {
 }
 
 // Install runs root's install.ps1 detached, building from source (the card's worktree, or root itself).
-// The script stops this very server, so the child must not depend on us.
-func Install(root, source, logDir string) {
+// On success the script stops this very server before finishing, so onResult normally never runs; it
+// only fires if the script fails before that point (e.g. the build broke), letting the caller surface
+// the error to the user instead of leaving them waiting for a restart that will never happen.
+func Install(root, source, logDir string, onResult func(err error)) {
 	if runtime.GOOS != "windows" {
 		return
 	}
@@ -47,8 +49,27 @@ func Install(root, source, logDir string) {
 	proc.Detach(cmd)
 	if err := cmd.Start(); err != nil {
 		log.Printf("auto-install: %v", err)
+		if onResult != nil {
+			onResult(err)
+		}
 		return
 	}
 	log.Printf("auto-install: compilando %s", source)
-	_ = cmd.Process.Release()
+	go func() {
+		if err := cmd.Wait(); err != nil && onResult != nil {
+			onResult(err)
+		}
+	}()
+}
+
+// LogTail returns the last maxBytes of install.log, to show the user why an update failed.
+func LogTail(logDir string, maxBytes int) string {
+	data, err := os.ReadFile(filepath.Join(logDir, "install.log"))
+	if err != nil {
+		return ""
+	}
+	if len(data) > maxBytes {
+		data = data[len(data)-maxBytes:]
+	}
+	return strings.TrimSpace(string(data))
 }

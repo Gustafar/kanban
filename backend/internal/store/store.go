@@ -41,6 +41,7 @@ type Card struct {
 	Model       string    `json:"model"`     // "" = the CLI's default; otherwise an alias like opus, sonnet, haiku, fable
 	Effort      string    `json:"effort"`    // "" = default; low | medium | high | xhigh | max
 	Polishing   bool      `json:"polishing"` // the AI is discussing/refining this card (in memory only)
+	DependsOn   int64     `json:"dependsOn"` // 0 = none; otherwise a card that must reach "done" before this one can run
 }
 
 type Attachment struct {
@@ -79,6 +80,9 @@ type Comment struct {
 	CardID    int64     `json:"cardId"`
 	Author    string    `json:"author"` // "user" | "ai"
 	Body      string    `json:"body"`
+	RunID     int64     `json:"runId"` // 0 = not tied to a diff line
+	File      string    `json:"file"`  // diff file path, set together with Line
+	Line      int       `json:"line"`  // 1-based line within the diff's new (or old, for deletions) file; 0 = not a line comment
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -178,7 +182,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + chatSchema); err != nil {
 		return nil, err
 	}
 	// additive migrations for databases created by earlier versions
@@ -193,6 +197,10 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE cards ADD COLUMN depends_on INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE comments ADD COLUMN run_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE comments ADD COLUMN file TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN line INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, err
@@ -247,6 +255,9 @@ CREATE TABLE IF NOT EXISTS comments (
 	card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
 	author TEXT NOT NULL,
 	body TEXT NOT NULL,
+	run_id INTEGER NOT NULL DEFAULT 0,
+	file TEXT NOT NULL DEFAULT '',
+	line INTEGER NOT NULL DEFAULT 0,
 	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS settings (
@@ -343,13 +354,13 @@ const cardSelect = `SELECT c.id,c.project_id,c.title,c.description,c.col,c.posit
 	(SELECT COUNT(*) FROM comments m WHERE m.card_id=c.id),
 	c.tags,
 	(SELECT COUNT(*) FROM attachments a WHERE a.card_id=c.id),
-	c.model, c.effort
+	c.model, c.effort, c.depends_on
 	FROM cards c`
 
 func scanCard(sc interface{ Scan(...any) error }) (Card, error) {
 	var c Card
 	var tags string
-	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus, &c.Comments, &tags, &c.Attachments, &c.Model, &c.Effort)
+	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus, &c.Comments, &tags, &c.Attachments, &c.Model, &c.Effort, &c.DependsOn)
 	c.Tags = []string{}
 	if tags != "" {
 		c.Tags = strings.Split(tags, ",")
@@ -418,6 +429,14 @@ func (s *Store) UpdateCard(id int64, title, description, mode string) (Card, err
 // SetCardModel stores which model and effort level the card's runs use ("" = the CLI default).
 func (s *Store) SetCardModel(id int64, model, effort string) (Card, error) {
 	if _, err := s.db.Exec(`UPDATE cards SET model=?,effort=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, model, effort, id); err != nil {
+		return Card{}, err
+	}
+	return s.GetCard(id)
+}
+
+// SetCardDependency sets which card (0 = none) must reach the "done" column before this one's runs can start.
+func (s *Store) SetCardDependency(id, dependsOn int64) (Card, error) {
+	if _, err := s.db.Exec(`UPDATE cards SET depends_on=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, dependsOn, id); err != nil {
 		return Card{}, err
 	}
 	return s.GetCard(id)
@@ -516,10 +535,27 @@ func (s *Store) UpdateRun(id int64, status, sessionID, branch, worktree, errMsg 
 	return err
 }
 
-// MarkInterruptedRuns flags runs left "running" or "queued" by a previous server process (the queue lives in memory).
-func (s *Store) MarkInterruptedRuns() error {
-	_, err := s.db.Exec(`UPDATE runs SET status='failed',error='servidor reiniciado durante a execução',finished_at=CURRENT_TIMESTAMP WHERE status IN ('running','queued')`)
-	return err
+// ResetInterruptedRuns resets runs left "running" by a previous server process back to "queued"
+// (the run queue itself lives only in memory and does not survive a restart), then returns every
+// run now waiting to start — "queued" runs included — in creation order, so the caller can requeue them.
+func (s *Store) ResetInterruptedRuns() ([]Run, error) {
+	if _, err := s.db.Exec(`UPDATE runs SET status='queued' WHERE status='running'`); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(runSelect + ` WHERE status='queued' ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Run{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) GetSetting(key string) (string, bool) {
@@ -603,19 +639,28 @@ func (s *Store) DeleteAttachment(id int64) error {
 }
 
 func (s *Store) AddComment(cardID int64, author, body string) (Comment, error) {
+	return s.addComment(cardID, author, body, 0, "", 0)
+}
+
+// AddLineComment attaches a comment to a specific file/line of a run's diff, for review feedback.
+func (s *Store) AddLineComment(cardID int64, author, body string, runID int64, file string, line int) (Comment, error) {
+	return s.addComment(cardID, author, body, runID, file, line)
+}
+
+func (s *Store) addComment(cardID int64, author, body string, runID int64, file string, line int) (Comment, error) {
 	if author != "ai" {
 		author = "user"
 	}
-	res, err := s.db.Exec(`INSERT INTO comments(card_id,author,body) VALUES(?,?,?)`, cardID, author, body)
+	res, err := s.db.Exec(`INSERT INTO comments(card_id,author,body,run_id,file,line) VALUES(?,?,?,?,?,?)`, cardID, author, body, runID, file, line)
 	if err != nil {
 		return Comment{}, err
 	}
 	id, _ := res.LastInsertId()
-	return Comment{ID: id, CardID: cardID, Author: author, Body: body, CreatedAt: time.Now()}, nil
+	return Comment{ID: id, CardID: cardID, Author: author, Body: body, RunID: runID, File: file, Line: line, CreatedAt: time.Now()}, nil
 }
 
 func (s *Store) ListComments(cardID int64) ([]Comment, error) {
-	rows, err := s.db.Query(`SELECT id,card_id,author,body,created_at FROM comments WHERE card_id=? ORDER BY id`, cardID)
+	rows, err := s.db.Query(`SELECT id,card_id,author,body,run_id,file,line,created_at FROM comments WHERE card_id=? ORDER BY id`, cardID)
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +668,7 @@ func (s *Store) ListComments(cardID int64) ([]Comment, error) {
 	out := []Comment{}
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.CardID, &c.Author, &c.Body, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.CardID, &c.Author, &c.Body, &c.RunID, &c.File, &c.Line, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

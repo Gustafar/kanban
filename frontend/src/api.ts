@@ -1,6 +1,14 @@
-import type { Attachment, Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent, ServerStatus, UsageReport, Limits } from './types'
+import type { Attachment, Card, Chat, ChatMessage, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent, ServerStatus, UsageReport, Limits } from './types'
 
 type ProjectInput = Pick<Project, 'name' | 'path' | 'color' | 'isolation'>
+
+export class ApiError extends Error {
+  output?: string
+  constructor(message: string, output?: string) {
+    super(message)
+    this.output = output
+  }
+}
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch('/api' + path, {
@@ -10,7 +18,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   })
   if (res.status === 204) return undefined as T
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `Erro ${res.status}`)
+  if (!res.ok) throw new ApiError(data.error || `Erro ${res.status}`, data.output)
   return data as T
 }
 
@@ -26,7 +34,7 @@ export const api = {
     req<Card>('POST', `/projects/${pid}/cards`, c),
   quick: (pid: number, c: { text: string; column: ColumnId; mode: Mode }) =>
     req<Card>('POST', `/projects/${pid}/quick`, { description: c.text, column: c.column, mode: c.mode }),
-  updateCard: (id: number, c: { title: string; description: string; mode: Mode; tags?: string[]; model?: string; effort?: string }) => req<Card>('PUT', `/cards/${id}`, c),
+  updateCard: (id: number, c: { title: string; description: string; mode: Mode; tags?: string[]; model?: string; effort?: string; dependsOn?: number }) => req<Card>('PUT', `/cards/${id}`, c),
   attachments: (cardId: number) => req<Attachment[]>('GET', `/cards/${cardId}/attachments`),
   uploadAttachment: async (cardId: number, file: File) => {
     const res = await fetch(`/api/cards/${cardId}/attachments?name=${encodeURIComponent(file.name || 'colado.png')}`, {
@@ -43,9 +51,17 @@ export const api = {
   polishCard: (id: number, message = '') => req<void>('POST', `/cards/${id}/polish`, { message }),
   runs: (cardId: number) => req<Run[]>('GET', `/cards/${cardId}/runs`),
   comments: (cardId: number) => req<Comment[]>('GET', `/cards/${cardId}/comments`),
-  addComment: (cardId: number, body: string) => req<Comment>('POST', `/cards/${cardId}/comments`, { body }),
+  addComment: (cardId: number, body: string, line?: { runId: number; file: string; line: number }) =>
+    req<Comment>('POST', `/cards/${cardId}/comments`, { body, runId: line?.runId, file: line?.file, line: line?.line }),
+  chats: (pid: number) => req<Chat[]>('GET', `/projects/${pid}/chats`),
+  createChat: (pid: number, c: { model: string; effort: string }) => req<Chat>('POST', `/projects/${pid}/chats`, c),
+  updateChat: (id: number, c: { title?: string; model?: string; effort?: string }) => req<Chat>('PUT', `/chats/${id}`, c),
+  deleteChat: (id: number) => req<void>('DELETE', `/chats/${id}`),
+  chatMessages: (id: number) => req<ChatMessage[]>('GET', `/chats/${id}/messages`),
+  sendChat: (id: number, text: string) => req<void>('POST', `/chats/${id}/messages`, { text }),
+  cancelChat: (id: number) => req<void>('POST', `/chats/${id}/cancel`),
   events: (runId: number) => req<RunEvent[]>('GET', `/runs/${runId}/events`),
-  pendingUpdate: () => req<{ pending: { cardId: number; title: string } | null }>('GET', '/update'),
+  pendingUpdate: () => req<{ pending: { cardId: number; title: string; error?: string } | null }>('GET', '/update'),
   applyUpdate: () => req<{ ok: boolean }>('POST', '/update'),
   status: () => req<ServerStatus>('GET', '/status'),
   usage: () => req<UsageReport>('GET', '/usage'),
@@ -55,6 +71,6 @@ export const api = {
   approve: (runId: number) => req<void>('POST', `/runs/${runId}/approve`),
   cancel: (runId: number) => req<void>('POST', `/runs/${runId}/cancel`),
   diff: (runId: number) => req<{ diff: string }>('GET', `/runs/${runId}/diff`),
-  merge: (runId: number) => req<void>('POST', `/runs/${runId}/merge`),
+  merge: (runId: number, force = false) => req<void>('POST', `/runs/${runId}/merge`, { force }),
   discard: (runId: number) => req<void>('POST', `/runs/${runId}/discard`),
 }

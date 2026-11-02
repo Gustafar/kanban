@@ -18,10 +18,13 @@ export interface Card {
   id: number; projectId: number; title: string; description: string
   column: ColumnId; position: number; mode: Mode; runStatus: RunStatus | ''; commentCount: number
   tags: string[]; attachmentCount: number; titling?: boolean; polishing?: boolean; createdAt?: string; model?: string; effort?: string
+  dependsOn: number
 }
 export interface Attachment { id: number; cardId: number; name: string; mime: string; size: number; createdAt: string }
 export const isImage = (mime: string) => /^image\/(png|jpeg|gif|webp)/.test(mime)
-export interface Comment { id: number; cardId: number; author: 'user' | 'ai'; body: string; createdAt: string }
+export interface Comment { id: number; cardId: number; author: 'user' | 'ai'; body: string; runId: number; file: string; line: number; createdAt: string }
+export interface Chat { id: number; projectId: number; title: string; model: string; effort: string; busy: boolean; createdAt: string; updatedAt: string }
+export interface ChatMessage { id: number; chatId: number; role: 'user' | 'assistant' | 'tool' | 'error'; body: string; createdAt: string }
 export interface Run {
   id: number; cardId: number; status: RunStatus; sessionId: string
   branch: string; worktreePath: string; prompt: string; error: string
@@ -29,7 +32,8 @@ export interface Run {
   startedAt: string | null; finishedAt: string | null; createdAt: string
 }
 export interface RunEvent { id: number; runId: number; kind: 'text' | 'tool' | 'result' | 'error' | 'system'; data: string; createdAt: string }
-export interface Notice { id: number; kind: string; title: string; body: string; cardId: number }
+// kind: 'succeeded' | 'failed' | 'warn' from the server, 'error' for failed requests in the UI
+export interface Notice { id: number; kind: string; title: string; body: string; cardId?: number; at: number; read: boolean }
 
 export interface LimitWindow { utilization: number; resetsAt: number } // utilization 0..1, resetsAt unix seconds
 export interface Limits { fiveHour: LimitWindow | null; sevenDay: LimitWindow | null; status: string; updatedAt: number }

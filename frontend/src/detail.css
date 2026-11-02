@@ -17,6 +17,7 @@
 .field-block { display: grid; gap: 8px; }
 .field-title { display: flex; align-items: baseline; gap: 8px; font-weight: 600; font-size: 13px; color: var(--slate); }
 .field-title small { font-weight: 400; opacity: 0.8; }
+.dependency-picker { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: inherit; }
 .desc-grow { width: 100%; min-height: 9rem; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 15px; line-height: 1.6; resize: none; field-sizing: content; overflow: hidden; }
 .desc-grow:focus-visible, .tag-editor:focus-within { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .tag-editor { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
@@ -90,7 +91,20 @@
 .diff-file summary::-webkit-details-marker { display: none; }
 .diff-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diff-file .diff { border-top: 1px solid var(--line); padding: 8px 0; font: 12px/1.5 var(--font-mono); overflow-x: auto; }
-.diff-file .diff span { white-space: pre; }
+.diff-row { position: relative; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding: 0 12px; }
+.diff-row:hover { background: var(--surface-2); }
+.diff-line-text { white-space: pre; flex: 1; min-width: 0; }
+.diff-row-add .diff-line-text { color: var(--moss); }
+.diff-row-del .diff-line-text { color: var(--rose); }
+.diff-row-hunk .diff-line-text, .diff-row-meta .diff-line-text { color: var(--slate); }
+.diff-comment-add { align-self: center; flex-shrink: 0; opacity: 0; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-size: 11px; color: var(--slate); background: var(--surface); }
+.diff-row:hover .diff-comment-add { opacity: 1; }
+.diff-comments, .diff-comment-form { flex-basis: 100%; margin: 4px 0 8px; display: grid; gap: 6px; }
+.diff-comment { padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); font: 12.5px/1.4 var(--font-sans); }
+.diff-comment[data-author="ai"] { background: var(--lane); }
+.diff-comment strong { display: block; font-size: 11px; color: var(--slate); margin-bottom: 2px; }
+.diff-comment-form textarea { width: 100%; resize: vertical; border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 8px; font: 12.5px/1.4 var(--font-sans); background: var(--surface-2); }
+.diff-comment-form .actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .composer { display: grid; gap: 8px; padding: 12px 20px 18px; border-top: 1px solid var(--line); background: var(--bg); }
 .composer-modes { display: flex; gap: 4px; flex-wrap: wrap; }

@@ -47,6 +47,31 @@
 .effort-dot[data-on] { width: 20px; height: 20px; border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent), inset 0 0 0 4px var(--accent); }
 .effort-hint { margin: 0; color: var(--slate); font-size: 12px; line-height: 1.5; }
 
+/* notification center (bell in the top bar) */
+.bell-btn { position: relative; }
+.bell-count { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--rose); color: #fff; font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; }
+.inbox-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 10px 6px; }
+.inbox-head strong { font-size: 14px; }
+.inbox-clear { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; }
+.inbox-clear:hover { text-decoration: underline; }
+.inbox-empty { margin: 4px 10px 10px; color: var(--slate); font-size: 13px; line-height: 1.5; }
+.inbox-item { display: flex; align-items: flex-start; gap: 4px; padding: 2px 4px 2px 0; border-radius: 10px; --tone: var(--line-strong); }
+.inbox-item:hover { background: var(--surface-2); }
+.inbox-item[data-kind='succeeded'] { --tone: var(--moss); }
+.inbox-item[data-kind='failed'], .inbox-item[data-kind='error'] { --tone: var(--rose); }
+.inbox-item[data-kind='warn'] { --tone: var(--amber); }
+.inbox-item[data-kind='update'] { --tone: var(--accent); }
+.inbox-text { display: grid; flex: 1; min-width: 0; gap: 2px; padding: 8px 6px 8px 12px; border: 0; border-left: 3px solid var(--tone); border-radius: 3px; background: none; color: inherit; text-align: left; line-height: 1.35; font: inherit; }
+.inbox-text:disabled { cursor: default; }
+.inbox-text b { font-weight: 600; font-size: 14px; }
+.inbox-text span { color: var(--slate); font-size: 13px; overflow-wrap: anywhere; }
+.inbox-text small { color: var(--slate); font-size: 11.5px; }
+.inbox-item[data-unread] .inbox-text b::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.inbox-x { width: 24px; height: 24px; margin-top: 6px; }
+.inbox-x svg { width: 14px; height: 14px; }
+.inbox-action { justify-self: start; margin-top: 6px; border: 0; border-radius: 8px; padding: 6px 14px; font-weight: 600; background: var(--accent); color: #fff; }
+.inbox-action:disabled { opacity: 0.6; }
+
 /* the card's model badge reuses the mode label look */
 .card-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .card-model { color: var(--accent); }

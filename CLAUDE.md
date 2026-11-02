@@ -26,7 +26,7 @@ Personal, local kanban board: each card can be run by Claude Code in an isolated
 ## Gotchas
 
 - The running server is the copy installed in `backend/bin`; changing the code does not change the app until you reinstall.
-- The pending app update (`selfupdate`) and the run queue live only in the server's memory.
+- The pending app update (`selfupdate`) is persisted in the `settings` table (survives a restart); the run queue still lives only in the server's memory.
 - Runs in projects without git edit the folder directly (with a snapshot); only one per folder at a time.
 - `move_card` and `create_card` (MCP) refuse the `doing` column on purpose: only the user starts runs.
 - `PLANO.md` (git-ignored) is the shared work plan between sessions; read it before starting and update it when you finish an item.

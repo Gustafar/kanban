@@ -12,6 +12,7 @@ import (
 
 // Minimal MCP server over stdio (newline-delimited JSON-RPC 2.0): initialize, ping, tools/list, tools/call.
 // KB_CARD_ID, when set (runs started by the board), becomes the default card for the card tools.
+// KB_PROJECT_ID, when set (the project chat), restricts every tool to that project.
 
 type rpcReq struct {
 	ID     json.RawMessage `json:"id"`
@@ -41,8 +42,27 @@ func argStr(a map[string]any, k string) string {
 	return strings.TrimSpace(v)
 }
 
+// scopeProject is KB_PROJECT_ID, set for the per-project chat: the tools then only see that project.
+func scopeProject() int64 {
+	id, _ := strconv.ParseInt(os.Getenv("KB_PROJECT_ID"), 10, 64)
+	return id
+}
+
 // cardArg resolves card_id (number or "#12") or falls back to the card this run belongs to.
 func cardArg(a map[string]any) (int64, error) {
+	id, err := rawCardArg(a)
+	if err != nil {
+		return 0, err
+	}
+	if scope := scopeProject(); scope != 0 {
+		if c, err := getCard(id); err != nil || c.ProjectID != scope {
+			return 0, fmt.Errorf("card #%d não pertence a este projeto", id)
+		}
+	}
+	return id, nil
+}
+
+func rawCardArg(a map[string]any) (int64, error) {
 	switch v := a["card_id"].(type) {
 	case float64:
 		return int64(v), nil
@@ -61,6 +81,14 @@ func projectByRef(ref string) (project, error) {
 	var ps []project
 	if err := api("GET", "/api/projects", nil, &ps); err != nil {
 		return project{}, err
+	}
+	if scope := scopeProject(); scope != 0 {
+		for _, p := range ps {
+			if p.ID == scope {
+				return p, nil // the ref is ignored: the chat is bound to its project
+			}
+		}
+		return project{}, fmt.Errorf("projeto da conversa não encontrado")
 	}
 	id, _ := strconv.ParseInt(ref, 10, 64)
 	for _, p := range ps {
@@ -98,6 +126,15 @@ func tools() []tool {
 				var ps []project
 				if err := api("GET", "/api/projects", nil, &ps); err != nil {
 					return "", err
+				}
+				if scope := scopeProject(); scope != 0 {
+					only := ps[:0]
+					for _, p := range ps {
+						if p.ID == scope {
+							only = append(only, p)
+						}
+					}
+					ps = only
 				}
 				return pretty(ps), nil
 			},
