@@ -1,7 +1,7 @@
 import { forwardRef } from 'react'
 import type { CSSProperties, HTMLAttributes } from 'react'
 import type { Card } from '../types'
-import { Bolt, Hand } from './Icons'
+import { Bolt, Chat, Hand } from './Icons'
 
 export const STATUS_LABEL: Record<string, string> = {
   awaiting_approval: 'Aguardando sua aprovação',
@@ -39,6 +39,7 @@ export const CardView = forwardRef<HTMLDivElement, Props>(function CardView({ ca
           {card.mode === 'auto' ? <Bolt /> : <Hand />}
           {card.mode === 'auto' ? 'Automático' : 'Com aprovação'}
         </span>
+        {card.commentCount > 0 && <span className="card-comments" title="Comentários"><Chat />{card.commentCount}</span>}
       </div>
       {showStatus && (
         <div className="card-status">

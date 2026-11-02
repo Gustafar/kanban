@@ -33,6 +33,12 @@ Ao criar o projeto o app detecta o modo pela pasta, e o diálogo oferece "Inicia
 - "Pedir ajuste" continua a mesma sessão do Claude (`--resume`).
 - Avisos: toast do Windows (servidor) e notificação do navegador (só em localhost/HTTPS).
 
+## Comentários, busca e atalhos
+
+- Cada card tem comentários (aba na gaveta). "Pedir ajuste" vira um comentário seu, o resumo final da IA vira um comentário dela, e a IA também escreve e lê comentários pelo MCP (`add_note`, `get_card`).
+- Busca por título e descrição, e filtros "Precisa de mim" (aguardando aprovação, com falha ou em revisão) e "IA trabalhando".
+- Atalhos: `n` novo card, `/` buscar, `1`–`9` trocar de projeto, `Esc` fechar, `?` ajuda.
+
 ## CLI
 
 `backend\bin\kb.exe` (ver `kb` sem argumentos): `projects`, `project-add`, `ls`, `add`, `move`, `run`, `approve`, `cancel`, `logs`, `diff`, `merge`.

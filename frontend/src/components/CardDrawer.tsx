@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { BoardListener } from '../useBoard'
-import type { Card, Mode, Project, Run, RunEvent } from '../types'
+import type { Card, Comment, Mode, Project, Run, RunEvent } from '../types'
 import { STATUS_LABEL } from './CardView'
 import { Branch, Close } from './Icons'
 import { ModeToggle } from './Dialogs'
@@ -33,7 +33,9 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   const [mode, setMode] = useState<Mode>(card.mode)
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<RunEvent[]>([])
-  const [tab, setTab] = useState<'log' | 'diff'>('log')
+  const [tab, setTab] = useState<'log' | 'diff' | 'comments'>('log')
+  const [comments, setComments] = useState<Comment[]>([])
+  const [commentText, setCommentText] = useState('')
   const [diff, setDiff] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
@@ -49,6 +51,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
   }, [onError])
 
   useEffect(() => { api.runs(card.id).then(setRuns).catch(e => onError(e.message)) }, [card.id, onError])
+  useEffect(() => { api.comments(card.id).then(setComments).catch(() => {}) }, [card.id])
   useEffect(() => {
     setEvents([])
     if (runId != null) api.events(runId).then(setEvents).catch(() => {})
@@ -58,6 +61,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
     if (type === 'run' && data.cardId === card.id) {
       setRuns(l => (l.some(r => r.id === data.id) ? l.map(r => (r.id === data.id ? data : r)) : [data, ...l]))
     }
+    if (type === 'comment' && data.cardId === card.id) setComments(l => (l.some(c => c.id === data.id) ? l : [...l, data]))
     if (type === 'run_event' && data.runId === runId) setEvents(l => (l.some(e => e.id === data.id) ? l : [...l, data]))
   }), [subscribe, card.id, runId])
 
@@ -65,7 +69,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
     if (tab === 'diff' && runId != null) api.diff(runId).then(d => setDiff(d.diff)).catch(e => onError(e.message))
   }, [tab, runId, run?.status, onError])
 
-  useEffect(() => { logRef.current?.scrollTo({ top: logRef.current.scrollHeight }) }, [events.length, tab])
+  useEffect(() => { logRef.current?.scrollTo({ top: logRef.current.scrollHeight }) }, [events.length, comments.length, tab])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -136,12 +140,31 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
             )}
           </section>
 
-          {run && (
+          <div className="tabs" role="tablist">
+            <button role="tab" aria-selected={tab === 'log'} onClick={() => setTab('log')} disabled={!run}>Atividade</button>
+            <button role="tab" aria-selected={tab === 'diff'} onClick={() => setTab('diff')} disabled={!run}>Mudanças</button>
+            <button role="tab" aria-selected={tab === 'comments'} onClick={() => setTab('comments')}>
+              Comentários{comments.length > 0 && <span className="tab-count">{comments.length}</span>}
+            </button>
+          </div>
+          {tab === 'comments' ? (
             <>
-              <div className="tabs" role="tablist">
-                <button role="tab" aria-selected={tab === 'log'} onClick={() => setTab('log')}>Atividade</button>
-                <button role="tab" aria-selected={tab === 'diff'} onClick={() => setTab('diff')}>Mudanças</button>
+              <div className="log comments" ref={logRef}>
+                {comments.length === 0 && <p className="muted pad">Nenhum comentário ainda. Use para registrar decisões ou contexto; a IA também lê e escreve aqui.</p>}
+                {comments.map(c => (
+                  <article key={c.id} className="comment" data-author={c.author}>
+                    <header><strong>{c.author === 'ai' ? 'IA' : 'Você'}</strong><time dateTime={c.createdAt}>{new Date(c.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></header>
+                    <p>{c.body}</p>
+                  </article>
+                ))}
               </div>
+              <form className="followup" onSubmit={e => { e.preventDefault(); if (commentText.trim()) guard(async () => { await api.addComment(card.id, commentText.trim()); setCommentText('') }) }}>
+                <input value={commentText} onChange={e => setCommentText(e.target.value)} placeholder="Escrever um comentário" aria-label="Comentário" />
+                <button className="btn" disabled={busy || !commentText.trim()}>Comentar</button>
+              </form>
+            </>
+          ) : run && (
+            <>
               {tab === 'log' ? (
                 <div className="log" ref={logRef}>
                   {events.length === 0 && <p className="muted pad">{status === 'awaiting_approval' ? 'Aprove para a IA começar.' : 'Sem atividade registrada.'}</p>}

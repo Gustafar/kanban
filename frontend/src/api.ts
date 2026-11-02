@@ -1,4 +1,4 @@
-import type { Card, ColumnId, Inspection, Mode, Project, Run, RunEvent } from './types'
+import type { Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent } from './types'
 
 type ProjectInput = Pick<Project, 'name' | 'path' | 'color' | 'isolation'>
 
@@ -29,6 +29,8 @@ export const api = {
   deleteCard: (id: number) => req<void>('DELETE', `/cards/${id}`),
   runCard: (id: number, message = '') => req<Run>('POST', `/cards/${id}/run`, { message }),
   runs: (cardId: number) => req<Run[]>('GET', `/cards/${cardId}/runs`),
+  comments: (cardId: number) => req<Comment[]>('GET', `/cards/${cardId}/comments`),
+  addComment: (cardId: number, body: string) => req<Comment>('POST', `/cards/${cardId}/comments`, { body }),
   events: (runId: number) => req<RunEvent[]>('GET', `/runs/${runId}/events`),
   approve: (runId: number) => req<void>('POST', `/runs/${runId}/approve`),
   cancel: (runId: number) => req<void>('POST', `/runs/${runId}/cancel`),

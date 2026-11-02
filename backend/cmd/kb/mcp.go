@@ -118,7 +118,7 @@ func tools() []tool {
 			},
 		},
 		{
-			Name: "get_card", Description: "Mostra um card completo (título, descrição, coluna, modo). Sem card_id, usa o card desta execução.",
+			Name: "get_card", Description: "Mostra um card completo (título, descrição, coluna, modo) com os comentários. Sem card_id, usa o card desta execução.",
 			InputSchema: schema(nil, map[string]any{"card_id": str("id do card")}),
 			run: func(a map[string]any) (string, error) {
 				id, err := cardArg(a)
@@ -126,7 +126,16 @@ func tools() []tool {
 					return "", err
 				}
 				c, err := getCard(id)
-				return pretty(c), err
+				if err != nil {
+					return "", err
+				}
+				var cs []struct {
+					Author    string `json:"author"`
+					Body      string `json:"body"`
+					CreatedAt string `json:"createdAt"`
+				}
+				_ = api("GET", fmt.Sprintf("/api/cards/%d/comments", id), nil, &cs)
+				return pretty(map[string]any{"card": c, "comments": cs}), nil
 			},
 		},
 		{
@@ -180,8 +189,8 @@ func tools() []tool {
 			},
 		},
 		{
-			Name: "add_note", Description: "Acrescenta uma nota com data/hora à descrição do card (progresso, decisões, pendências). Sem card_id, usa o card desta execução.",
-			InputSchema: schema([]string{"text"}, map[string]any{"card_id": str("id do card"), "text": str("texto da nota")}),
+			Name: "add_note", Description: "Adiciona um comentário (autor: IA) ao card, para registrar progresso, decisões ou pendências. Sem card_id, usa o card desta execução.",
+			InputSchema: schema([]string{"text"}, map[string]any{"card_id": str("id do card"), "text": str("texto do comentário")}),
 			run: func(a map[string]any) (string, error) {
 				id, err := cardArg(a)
 				if err != nil {
@@ -191,17 +200,8 @@ func tools() []tool {
 				if text == "" {
 					return "", fmt.Errorf("text é obrigatório")
 				}
-				c, err := getCard(id)
-				if err != nil {
-					return "", err
-				}
-				desc := strings.TrimRight(c.Description, "\n")
-				if desc != "" {
-					desc += "\n\n"
-				}
-				desc += fmt.Sprintf("[%s] %s", time.Now().Format("02/01 15:04"), text)
-				err = api("PUT", fmt.Sprintf("/api/cards/%d", id), map[string]string{"title": c.Title, "description": desc, "mode": c.Mode}, nil)
-				return "nota adicionada", err
+				err = api("POST", fmt.Sprintf("/api/cards/%d/comments", id), map[string]string{"body": text, "author": "ai"}, nil)
+				return "comentário adicionado", err
 			},
 		},
 		{

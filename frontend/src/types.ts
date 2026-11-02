@@ -15,8 +15,9 @@ export interface Project { id: number; name: string; path: string; color: string
 export interface Inspection { exists: boolean; isGit: boolean; hasCommit: boolean; hasGitignore: boolean }
 export interface Card {
   id: number; projectId: number; title: string; description: string
-  column: ColumnId; position: number; mode: Mode; runStatus: RunStatus | ''
+  column: ColumnId; position: number; mode: Mode; runStatus: RunStatus | ''; commentCount: number
 }
+export interface Comment { id: number; cardId: number; author: 'user' | 'ai'; body: string; createdAt: string }
 export interface Run {
   id: number; cardId: number; status: RunStatus; sessionId: string
   branch: string; worktreePath: string; prompt: string; error: string

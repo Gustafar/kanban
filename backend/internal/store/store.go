@@ -33,6 +33,15 @@ type Card struct {
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	RunStatus   string    `json:"runStatus"` // status of latest run, "" if none
+	Comments    int       `json:"commentCount"`
+}
+
+type Comment struct {
+	ID        int64     `json:"id"`
+	CardID    int64     `json:"cardId"`
+	Author    string    `json:"author"` // "user" | "ai"
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type Run struct {
@@ -123,6 +132,14 @@ CREATE TABLE IF NOT EXISTS run_events (
 	data TEXT NOT NULL,
 	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS comments (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+	author TEXT NOT NULL,
+	body TEXT NOT NULL,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_comments_card ON comments(card_id);
 CREATE INDEX IF NOT EXISTS idx_cards_project ON cards(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_card ON runs(card_id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id);
@@ -198,12 +215,13 @@ func (s *Store) DeleteProject(id int64) error {
 // ---- cards ----
 
 const cardSelect = `SELECT c.id,c.project_id,c.title,c.description,c.col,c.position,c.mode,c.created_at,c.updated_at,
-	COALESCE((SELECT status FROM runs r WHERE r.card_id=c.id ORDER BY r.id DESC LIMIT 1),'')
+	COALESCE((SELECT status FROM runs r WHERE r.card_id=c.id ORDER BY r.id DESC LIMIT 1),''),
+	(SELECT COUNT(*) FROM comments m WHERE m.card_id=c.id)
 	FROM cards c`
 
 func scanCard(sc interface{ Scan(...any) error }) (Card, error) {
 	var c Card
-	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus)
+	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus, &c.Comments)
 	return c, err
 }
 
@@ -371,6 +389,35 @@ func (s *Store) ListEvents(runID int64) ([]RunEvent, error) {
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddComment(cardID int64, author, body string) (Comment, error) {
+	if author != "ai" {
+		author = "user"
+	}
+	res, err := s.db.Exec(`INSERT INTO comments(card_id,author,body) VALUES(?,?,?)`, cardID, author, body)
+	if err != nil {
+		return Comment{}, err
+	}
+	id, _ := res.LastInsertId()
+	return Comment{ID: id, CardID: cardID, Author: author, Body: body, CreatedAt: time.Now()}, nil
+}
+
+func (s *Store) ListComments(cardID int64) ([]Comment, error) {
+	rows, err := s.db.Query(`SELECT id,card_id,author,body,created_at FROM comments WHERE card_id=? ORDER BY id`, cardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Comment{}
+	for rows.Next() {
+		var c Comment
+		if err := rows.Scan(&c.ID, &c.CardID, &c.Author, &c.Body, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }

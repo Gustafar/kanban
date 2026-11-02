@@ -54,6 +54,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/cards/{id}", s.deleteCard)
 	mux.HandleFunc("POST /api/cards/{id}/run", s.runCard)
 	mux.HandleFunc("GET /api/cards/{id}/runs", s.listRuns)
+	mux.HandleFunc("GET /api/cards/{id}/comments", s.listComments)
+	mux.HandleFunc("POST /api/cards/{id}/comments", s.addComment)
 
 	mux.HandleFunc("GET /api/runs/{id}/events", s.runEvents)
 	mux.HandleFunc("POST /api/runs/{id}/approve", s.approveRun)
@@ -403,10 +405,14 @@ func (s *Server) runCard(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	run, err := s.runner.Request(c, strings.TrimSpace(b.Message))
+	msg := strings.TrimSpace(b.Message)
+	run, err := s.runner.Request(c, msg)
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	if msg != "" {
+		_, _ = s.comment(c.ID, "user", msg) // the follow-up is part of the card's conversation
 	}
 	if c.Column != "doing" {
 		if mv, err := s.store.MoveCard(c.ID, "doing", c.Position); err == nil {
@@ -414,6 +420,50 @@ func (s *Server) runCard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 202, run)
+}
+
+// ---- comments ----
+
+func (s *Server) listComments(w http.ResponseWriter, r *http.Request) {
+	cs, err := s.store.ListComments(pathID(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, cs)
+}
+
+// addComment stores a comment and refreshes the card (its comment count changed).
+func (s *Server) addComment(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Body   string `json:"body"`
+		Author string `json:"author"`
+	}
+	if decode(r, &b) != nil || strings.TrimSpace(b.Body) == "" {
+		badRequest(w, "comentário vazio")
+		return
+	}
+	c, err := s.comment(pathID(r), b.Author, strings.TrimSpace(b.Body))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, c)
+}
+
+func (s *Server) comment(cardID int64, author, body string) (store.Comment, error) {
+	if _, err := s.store.GetCard(cardID); err != nil {
+		return store.Comment{}, err
+	}
+	c, err := s.store.AddComment(cardID, author, body)
+	if err != nil {
+		return c, err
+	}
+	s.hub.Publish("comment", c)
+	if card, err := s.store.GetCard(cardID); err == nil {
+		s.hub.Publish("card", card)
+	}
+	return c, nil
 }
 
 // ---- runs ----

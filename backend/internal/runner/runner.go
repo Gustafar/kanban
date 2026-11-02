@@ -276,11 +276,11 @@ func (r *Runner) execute(runID int64) {
 
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
-	resultErr := ""
+	resultErr, resultText := "", ""
 	isError := false
 	for sc.Scan() {
 		if e, ok := r.handleLine(runID, sc.Bytes()); ok {
-			isError, resultErr = e.isError, e.err
+			isError, resultErr, resultText = e.isError, e.err, e.text
 		}
 	}
 	waitErr := cmd.Wait()
@@ -305,6 +305,12 @@ func (r *Runner) execute(runID int64) {
 		} else {
 			_ = commitAll(wt, "kanban: "+card.Title)
 		}
+		// the AI's closing summary becomes its comment on the card
+		if t := strings.TrimSpace(resultText); t != "" {
+			if c, err := r.store.AddComment(card.ID, "ai", t); err == nil {
+				r.publish("comment", c)
+			}
+		}
 		r.finish(run, card, "succeeded", "")
 	}
 }
@@ -312,6 +318,7 @@ func (r *Runner) execute(runID int64) {
 type resultInfo struct {
 	isError bool
 	err     string
+	text    string
 }
 
 // handleLine translates one stream-json line into stored/broadcast events.
@@ -359,7 +366,11 @@ func (r *Runner) handleLine(runID int64, line []byte) (resultInfo, bool) {
 			kind = "error"
 		}
 		r.emit(runID, kind, m.Result)
-		return resultInfo{isError: m.IsError, err: map[bool]string{true: m.Result}[m.IsError]}, true
+		info := resultInfo{isError: m.IsError, text: m.Result}
+		if m.IsError {
+			info.err = m.Result
+		}
+		return info, true
 	}
 	return resultInfo{}, false
 }
