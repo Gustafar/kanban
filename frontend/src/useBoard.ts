@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import type { Card, Notice, Project, RunEvent } from './types'
+import type { Card, Notice, Project, RunEvent, ServerStatus } from './types'
 
 type Live = Record<number, string> // cardId -> last activity line
 
@@ -20,6 +20,7 @@ export function useBoard() {
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [online, setOnline] = useState(true)
+  const [status, setStatus] = useState<ServerStatus>({ max: 2, running: 0, queued: 0 })
 
   const projectIdRef = useRef<number | null>(null)
   projectIdRef.current = projectId
@@ -49,6 +50,7 @@ export function useBoard() {
     es.onopen = () => {
       setOnline(true)
       // events missed while offline: resync
+      api.status().then(setStatus).catch(() => {})
       if (projectIdRef.current != null) loadCards(projectIdRef.current).catch(() => {})
     }
     es.onerror = () => setOnline(false)
@@ -73,6 +75,7 @@ export function useBoard() {
           }
           break
         }
+        case 'status': setStatus(data); break
         case 'notify': {
           const n = { ...data, id: ++noticeSeq.current } as Notice
           setNotices(l => [...l, n])
@@ -94,6 +97,6 @@ export function useBoard() {
 
   return {
     projects, projectId, setProjectId, cards, setCards, live, notices, dismissNotice,
-    error, setError, loaded, online, subscribe, reloadProjects: loadProjects,
+    error, setError, loaded, online, status, setStatus, subscribe, reloadProjects: loadProjects,
   }
 }

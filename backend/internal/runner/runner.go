@@ -27,12 +27,15 @@ type Runner struct {
 	mu      sync.Mutex
 	cancels map[int64]context.CancelFunc // runID -> cancel
 	busy    map[int64]bool               // projectID -> a direct-mode run is editing the folder
+	max     int                          // parallelism limit (see queue.go)
+	running int                          // slots in use
+	queue   []int64                      // run ids waiting for a slot, FIFO
 
 	mcpBin, baseURL, token string
 }
 
 func New(s *store.Store, dataDir string, p Publisher) *Runner {
-	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}}
+	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}, max: DefaultMaxParallel}
 }
 
 func (r *Runner) attachDir(cardID int64) string {
@@ -121,7 +124,7 @@ Regras:
 // Request is called when a card enters "doing" (or the user hits "run").
 // In "approval" mode it parks the run until Approve; in "auto" mode it starts right away.
 func (r *Runner) Request(card store.Card, message string) (store.Run, error) {
-	if run, err := r.store.LatestRun(card.ID); err == nil && (run.Status == "running" || run.Status == "awaiting_approval") {
+	if run, err := r.store.LatestRun(card.ID); err == nil && (run.Status == "running" || run.Status == "queued" || run.Status == "awaiting_approval") {
 		return run, nil // already queued/active
 	}
 	tmpl := promptTmpl
@@ -133,17 +136,18 @@ func (r *Runner) Request(card store.Card, message string) (store.Run, error) {
 		prompt = message // follow-up on an existing session
 	}
 	prompt += r.attachmentBlock(card.ID)
+	auto := card.Mode == "auto"
 	status := "awaiting_approval"
-	if card.Mode == "auto" {
-		status = "running"
+	if auto {
+		status = "queued" // schedule() flips it to running when a slot is free
 	}
 	run, err := r.store.CreateRun(card.ID, status, prompt)
 	if err != nil {
 		return run, err
 	}
 	r.publish("run", run)
-	if status == "running" {
-		go r.execute(run.ID)
+	if auto {
+		r.schedule(run.ID)
 	} else {
 		go notify.Toast("Aprovação necessária", card.Title)
 		r.publish("notify", map[string]any{"kind": "approval", "title": "Aprovação necessária", "body": card.Title, "cardId": card.ID})
@@ -159,12 +163,7 @@ func (r *Runner) Approve(runID int64) error {
 	if run.Status != "awaiting_approval" {
 		return fmt.Errorf("execução não está aguardando aprovação (status: %s)", run.Status)
 	}
-	if err := r.store.UpdateRun(runID, "running", "", "", "", "", nil, nil); err != nil {
-		return err
-	}
-	run.Status = "running"
-	r.publish("run", run)
-	go r.execute(runID)
+	r.schedule(runID) // starts now, or waits in the queue when all slots are busy
 	return nil
 }
 
@@ -180,7 +179,7 @@ func (r *Runner) Cancel(runID int64) error {
 	if err != nil {
 		return err
 	}
-	if run.Status == "awaiting_approval" {
+	if run.Status == "awaiting_approval" || (run.Status == "queued" && r.dequeue(runID)) {
 		now := time.Now()
 		_ = r.store.UpdateRun(runID, "cancelled", "", "", "", "", nil, &now)
 		run, _ = r.store.GetRun(runID)

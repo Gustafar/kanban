@@ -164,6 +164,10 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
                 <button className="btn ghost" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Recusar</button>
               </>}
               {status === 'running' && <button className="btn danger" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Parar execução</button>}
+              {status === 'queued' && <>
+                <span className="muted queue-note">Todas as vagas de execução estão ocupadas. Começa assim que uma liberar.</span>
+                <button className="btn ghost" disabled={busy} onClick={() => guard(() => api.cancel(run!.id))}>Sair da fila</button>
+              </>}
               {finished && <>
                 <button className="btn primary" disabled={busy} onClick={() => guard(() => api.merge(run!.id))}>{direct ? 'Aceitar mudanças' : 'Fazer merge na branch atual'}</button>
                 <button className="btn ghost" disabled={busy} onClick={() => {

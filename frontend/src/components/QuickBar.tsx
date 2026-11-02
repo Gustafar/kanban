@@ -111,6 +111,7 @@ export const QuickBar = forwardRef<HTMLTextAreaElement, { project: Project; onEr
         <select value={target} onChange={e => setTarget(e.target.value as ColumnId)} aria-label="Destino do card" title="Onde o card entra">
           {TARGETS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
+        {text.trim() && !busy && <kbd className="quick-hint">Enter</kbd>}
         <button type="button" className="send" onClick={() => void submit()} disabled={busy || !text.trim()} aria-label="Criar card" title="Criar card (Enter)">
           {busy ? <span className="spinner" /> : <Send />}
         </button>

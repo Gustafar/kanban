@@ -1,6 +1,14 @@
 const base = { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const
 
-export const Plus = () => <svg {...base}><path d="M12 5v14M5 12h14" /></svg>
+export const Logo = () => (
+  <svg width="28" height="28" viewBox="0 0 64 64" aria-hidden>
+    <rect width="64" height="64" rx="16" style={{ fill: 'var(--ink)' }} />
+    <rect x="13" y="15" width="10" height="34" rx="3" style={{ fill: 'var(--bg)' }} />
+    <rect x="27" y="15" width="10" height="22" rx="3" style={{ fill: 'var(--bg)' }} />
+    <rect x="41" y="15" width="10" height="28" rx="3" style={{ fill: 'var(--accent)' }} />
+  </svg>
+)
+export const Plus =() => <svg {...base}><path d="M12 5v14M5 12h14" /></svg>
 export const Close = () => <svg {...base}><path d="M18 6 6 18M6 6l12 12" /></svg>
 export const Hand = () => <svg {...base}><path d="M18 11V6a2 2 0 0 0-4 0v1M14 7V4a2 2 0 0 0-4 0v3M10 7V5a2 2 0 0 0-4 0v8M18 11a2 2 0 0 1 4 0v3a8 8 0 0 1-8 8h-1a8 8 0 0 1-6.5-3.3L3 14a2 2 0 0 1 3.2-2.4L8 13" /></svg>
 export const Bolt = () => <svg {...base}><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>

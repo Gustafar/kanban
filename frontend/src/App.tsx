@@ -5,7 +5,7 @@ import type { ColumnId } from './types'
 import { Board } from './components/Board'
 import { CardDrawer } from './components/CardDrawer'
 import { Modal, NewCardDialog, ProjectDialog } from './components/Dialogs'
-import { Bell, Gear, Plus, Search } from './components/Icons'
+import { Bell, Gear, Logo, Plus, Search } from './components/Icons'
 import { QuickBar } from './components/QuickBar'
 import type { Card } from './types'
 
@@ -92,18 +92,35 @@ export default function App() {
   return (
     <div className="app">
       <nav className="rail" aria-label="Projetos">
-        <div className="brand">Kanban</div>
+        <div className="brand"><Logo /><span>Kanban</span></div>
         <ul>
-          {b.projects.map(p => (
+          {b.projects.map((p, i) => (
             <li key={p.id}>
               <button className="proj" data-on={p.id === b.projectId || undefined} onClick={() => { b.setProjectId(p.id); setOpenCard(null) }}>
-                <span className="dot" style={{ background: p.color }} />
+                <span className="avatar" style={{ background: p.color }} aria-hidden>{p.name.trim().charAt(0).toUpperCase()}</span>
                 <span className="proj-name">{p.name}</span>
+                {i < 9 && <kbd className="proj-key">{i + 1}</kbd>}
               </button>
             </li>
           ))}
         </ul>
-        <button className="proj add" onClick={() => setDialog({ kind: 'project', edit: false })}><Plus /><span className="proj-name">Novo projeto</span></button>
+        <button className="proj add" onClick={() => setDialog({ kind: 'project', edit: false })}><span className="avatar ghost" aria-hidden><Plus /></span><span className="proj-name">Novo projeto</span></button>
+
+        <div className="rail-foot">
+          <div className="ai-meter" data-busy={b.status.running > 0 || undefined}>
+            <span className="pulse" aria-hidden />
+            <div className="ai-meter-text">
+              <strong>{b.status.running === 0 ? 'IA livre' : `IA em ${b.status.running} ${b.status.running === 1 ? 'tarefa' : 'tarefas'}`}</strong>
+              <span>{b.status.queued > 0 ? `${b.status.queued} na fila` : `até ${b.status.max} ao mesmo tempo`}</span>
+            </div>
+            <div className="stepper" role="group" aria-label="Execuções simultâneas">
+              <button onClick={() => api.setMaxParallel(b.status.max - 1).then(b.setStatus).catch(e => onError(e.message))} disabled={b.status.max <= 1} aria-label="Diminuir limite">−</button>
+              <output aria-label="Limite de execuções simultâneas">{b.status.max}</output>
+              <button onClick={() => api.setMaxParallel(b.status.max + 1).then(b.setStatus).catch(e => onError(e.message))} disabled={b.status.max >= 8} aria-label="Aumentar limite">+</button>
+            </div>
+          </div>
+          <div className="conn" data-off={!b.online || undefined}><i />{b.online ? 'Conectado' : 'Reconectando…'}</div>
+        </div>
       </nav>
 
       <main className="main">
@@ -140,13 +157,22 @@ export default function App() {
               <button className="icon-btn" onClick={() => setDialog({ kind: 'help' })} aria-label="Atalhos de teclado" title="Atalhos (?)">?</button>
             </div>
             {filtering && visible.length === 0 && <p className="no-results">Nenhum card combina com a busca ou o filtro.</p>}
-            <Board cards={visible} live={b.live} onMove={move} onOpen={setOpenCard} onAdd={column => setDialog({ kind: 'card', column })} />
+            {b.cards.length === 0 ? (
+              <div className="welcome">
+                <Logo />
+                <h2>Nenhuma tarefa em {project.name}</h2>
+                <p>Escreva o que você quer fazer na barra abaixo. A IA dá o título e as tags, e você decide quando ela executa.</p>
+                <span className="welcome-hint"><kbd>n</kbd> para começar a escrever</span>
+              </div>
+            ) : (
+              <Board cards={visible} live={b.live} onMove={move} onOpen={setOpenCard} onAdd={column => setDialog({ kind: 'card', column })} />
+            )}
             <QuickBar key={project.id} ref={quickRef} project={project} onError={onError} />
           </>
         ) : (
           <div className="empty">
             <h1>Comece por um projeto</h1>
-            <p>Cada projeto aponta para uma pasta com um repositório git. É lá que a IA vai trabalhar quando você mover um card para execução.</p>
+            <p>Cada projeto aponta para uma pasta do seu computador. É lá que a IA vai trabalhar quando você mandar um card para execução.</p>
             <button className="btn primary" onClick={() => setDialog({ kind: 'project', edit: false })}><Plus />Criar projeto</button>
           </div>
         )}

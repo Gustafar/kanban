@@ -41,6 +41,7 @@ function Column({ id, title, hint, cards, live, onOpen, onAdd }: {
   return (
     <section className="column" data-over={isOver || undefined} data-col={id} aria-label={title}>
       <header className="column-head">
+        <i className="col-dot" aria-hidden />
         <h2>{title}</h2>
         <span className="count">{cards.length}</span>
         <button className="icon-btn" onClick={() => onAdd(id)} aria-label={`Novo card em ${title}`}>+</button>

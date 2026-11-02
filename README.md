@@ -33,6 +33,10 @@ Ao criar o projeto o app detecta o modo pela pasta, e o diálogo oferece "Inicia
 - "Pedir ajuste" continua a mesma sessão do Claude (`--resume`).
 - Avisos: toast do Windows (servidor) e notificação do navegador (só em localhost/HTTPS).
 
+## Limite de execuções em paralelo
+
+No máximo N execuções da IA rodam ao mesmo tempo (padrão 2); as demais ficam **na fila** e começam na ordem de chegada quando uma vaga abre. Dá para tirar um card da fila na gaveta. O limite (1 a 8) é ajustado com o − / + no rodapé da barra lateral e fica salvo; `KB_MAX_PARALLEL` define o valor inicial. A fila vive na memória: se o servidor reiniciar, execuções em andamento ou na fila são marcadas como falhas.
+
 ## Barra de captura, tags e anexos
 
 - A barra no centro inferior cria o card a partir de texto livre: o card aparece na hora com um título provisório e, em alguns segundos, a IA (Haiku, via seu `claude`) troca pelo título final e adiciona tags. O texto que você escreveu vira a descrição, que é o pedido para a IA executar. `Enter` cria, `Shift+Enter` quebra a linha, `n` foca a barra.

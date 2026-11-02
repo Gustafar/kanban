@@ -173,6 +173,10 @@ CREATE TABLE IF NOT EXISTS comments (
 	body TEXT NOT NULL,
 	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS settings (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS attachments (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
@@ -421,9 +425,22 @@ func (s *Store) UpdateRun(id int64, status, sessionID, branch, worktree, errMsg 
 	return err
 }
 
-// MarkInterruptedRuns flags runs left "running" by a previous server process.
+// MarkInterruptedRuns flags runs left "running" or "queued" by a previous server process (the queue lives in memory).
 func (s *Store) MarkInterruptedRuns() error {
-	_, err := s.db.Exec(`UPDATE runs SET status='failed',error='servidor reiniciado durante a execução',finished_at=CURRENT_TIMESTAMP WHERE status='running'`)
+	_, err := s.db.Exec(`UPDATE runs SET status='failed',error='servidor reiniciado durante a execução',finished_at=CURRENT_TIMESTAMP WHERE status IN ('running','queued')`)
+	return err
+}
+
+func (s *Store) GetSetting(key string) (string, bool) {
+	var v string
+	if err := s.db.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v); err != nil {
+		return "", false
+	}
+	return v, true
+}
+
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
 

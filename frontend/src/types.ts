@@ -1,6 +1,7 @@
 export type ColumnId = 'backlog' | 'todo' | 'doing' | 'review' | 'done'
 export type Mode = 'approval' | 'auto'
-export type RunStatus = 'awaiting_approval' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type RunStatus = 'awaiting_approval' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export interface ServerStatus { max: number; running: number; queued: number }
 
 export const COLUMNS: { id: ColumnId; title: string; hint: string }[] = [
   { id: 'backlog', title: 'Backlog', hint: 'Ideias e tarefas soltas' },

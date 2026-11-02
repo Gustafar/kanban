@@ -1,4 +1,4 @@
-import type { Attachment, Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent } from './types'
+import type { Attachment, Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent, ServerStatus } from './types'
 
 type ProjectInput = Pick<Project, 'name' | 'path' | 'color' | 'isolation'>
 
@@ -44,6 +44,8 @@ export const api = {
   comments: (cardId: number) => req<Comment[]>('GET', `/cards/${cardId}/comments`),
   addComment: (cardId: number, body: string) => req<Comment>('POST', `/cards/${cardId}/comments`, { body }),
   events: (runId: number) => req<RunEvent[]>('GET', `/runs/${runId}/events`),
+  status: () => req<ServerStatus>('GET', '/status'),
+  setMaxParallel: (n: number) => req<ServerStatus>('PUT', '/settings', { maxParallel: n }),
   approve: (runId: number) => req<void>('POST', `/runs/${runId}/approve`),
   cancel: (runId: number) => req<void>('POST', `/runs/${runId}/cancel`),
   diff: (runId: number) => req<{ diff: string }>('GET', `/runs/${runId}/diff`),

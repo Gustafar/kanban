@@ -5,6 +5,7 @@ import { Bolt, Chat, Clip, Hand } from './Icons'
 
 export const STATUS_LABEL: Record<string, string> = {
   awaiting_approval: 'Aguardando sua aprovação',
+  queued: 'Na fila',
   running: 'Trabalhando…',
   succeeded: 'Pronto para revisão',
   failed: 'Falhou',

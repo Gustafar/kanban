@@ -29,6 +29,17 @@ func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
 	hub := NewHub()
 	srv := &Server{store: s, hub: hub, token: token, dataDir: dataDir, static: static}
 	srv.runner = runner.New(s, dataDir, hub.Publish)
+	// parallelism limit: saved setting, else KB_MAX_PARALLEL, else the default
+	limit := runner.DefaultMaxParallel
+	if n, err := strconv.Atoi(os.Getenv("KB_MAX_PARALLEL")); err == nil {
+		limit = n
+	}
+	if v, ok := s.GetSetting("max_parallel"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	srv.runner.SetMax(limit)
 	return srv, hub
 }
 
@@ -39,6 +50,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/events", s.sse)
 
+	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	mux.HandleFunc("GET /api/inspect", s.inspect)
 	mux.HandleFunc("POST /api/git/init", s.gitInit)
 	mux.HandleFunc("GET /api/projects", s.listProjects)
@@ -214,6 +227,26 @@ func (b *projectBody) validate() string {
 		return "modo de isolamento inválido"
 	}
 	return ""
+}
+
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.runner.Status())
+}
+
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		MaxParallel int `json:"maxParallel"`
+	}
+	if decode(r, &b) != nil || b.MaxParallel < 1 || b.MaxParallel > runner.MaxParallelCeiling {
+		badRequest(w, "maxParallel deve estar entre 1 e "+strconv.Itoa(runner.MaxParallelCeiling))
+		return
+	}
+	if err := s.store.SetSetting("max_parallel", strconv.Itoa(b.MaxParallel)); err != nil {
+		fail(w, err)
+		return
+	}
+	s.runner.SetMax(b.MaxParallel)
+	writeJSON(w, 200, s.runner.Status())
 }
 
 func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
