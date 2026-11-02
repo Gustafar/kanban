@@ -6,10 +6,12 @@ import { Board } from './components/Board'
 import { CardDrawer } from './components/CardDrawer'
 import { Modal, NewCardDialog, ProjectDialog } from './components/Dialogs'
 import { Bell, Gear, Logo, Plus, Search } from './components/Icons'
+import { MiniLimits } from './components/LimitMeters'
 import { QuickBar } from './components/QuickBar'
+import { UsageDialog } from './components/UsageDialog'
 import type { Card } from './types'
 
-type Dialog = { kind: 'card'; column: ColumnId } | { kind: 'project'; edit: boolean } | { kind: 'help' } | null
+type Dialog = { kind: 'card'; column: ColumnId } | { kind: 'project'; edit: boolean } | { kind: 'help' } | { kind: 'usage' } | null
 type Filter = 'all' | 'attention' | 'running'
 
 const FILTERS: { id: Filter; label: string; hint: string }[] = [
@@ -119,6 +121,7 @@ export default function App() {
               <button onClick={() => api.setMaxParallel(b.status.max + 1).then(b.setStatus).catch(e => onError(e.message))} disabled={b.status.max >= 8} aria-label="Aumentar limite">+</button>
             </div>
           </div>
+          <MiniLimits limits={b.limits} onOpen={() => setDialog({ kind: 'usage' })} />
           <div className="conn" data-off={!b.online || undefined}><i />{b.online ? 'Conectado' : 'Reconectando…'}</div>
         </div>
       </nav>
@@ -181,6 +184,7 @@ export default function App() {
       {card && project && <CardDrawer key={card.id} card={card} project={project} subscribe={b.subscribe} onClose={() => setOpenCard(null)} onError={onError} />}
 
       {dialog?.kind === 'card' && project && <NewCardDialog project={project} column={dialog.column} onClose={() => setDialog(null)} onError={onError} />}
+      {dialog?.kind === 'usage' && <UsageDialog limits={b.limits} onLimits={b.setLimits} onClose={() => setDialog(null)} onError={onError} />}
       {dialog?.kind === 'help' && (
         <Modal title="Atalhos de teclado" onClose={() => setDialog(null)}>
           <dl className="shortcuts">

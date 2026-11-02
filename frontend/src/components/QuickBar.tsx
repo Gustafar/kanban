@@ -2,13 +2,14 @@ import { forwardRef, useEffect, useRef, useState } from 'react'
 import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
 import { api } from '../api'
 import type { ColumnId, Project } from '../types'
-import { Close, Clip, Send } from './Icons'
+import { Check, Chevron, Close, Clip, Send } from './Icons'
+import { Popover } from './Popover'
 
 const MAX_FILE = 15 * 1024 * 1024
-const TARGETS: { id: ColumnId; label: string }[] = [
-  { id: 'backlog', label: 'Backlog' },
-  { id: 'todo', label: 'A fazer' },
-  { id: 'doing', label: 'Executar agora' },
+const TARGETS: { id: ColumnId; label: string; hint: string }[] = [
+  { id: 'backlog', label: 'Backlog', hint: 'Ideias e tarefas soltas' },
+  { id: 'todo', label: 'A fazer', hint: 'Prontas para a IA pegar' },
+  { id: 'doing', label: 'Executar agora', hint: 'A IA começa já (pede aprovação)' },
 ]
 
 interface Pending { key: number; file: File; url: string | null }
@@ -108,9 +109,21 @@ export const QuickBar = forwardRef<HTMLTextAreaElement, { project: Project; onEr
           placeholder="O que você quer fazer? A IA dá o título e as tags."
           aria-label="Descrever uma nova tarefa" disabled={busy}
         />
-        <select value={target} onChange={e => setTarget(e.target.value as ColumnId)} aria-label="Destino do card" title="Onde o card entra">
-          {TARGETS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-        </select>
+        <Popover up align="right" width={250} trigger={({ open, toggle }) => (
+          <button type="button" className="target-btn" onClick={toggle} aria-haspopup="menu" aria-expanded={open} title="Onde o card entra">
+            <i className="cdot" data-col={target} aria-hidden />
+            {TARGETS.find(t => t.id === target)?.label}
+            <Chevron />
+          </button>
+        )}>
+          {close => TARGETS.map(t => (
+            <button key={t.id} type="button" role="menuitemradio" aria-checked={t.id === target} className="pop-item" data-on={t.id === target || undefined} onClick={() => { setTarget(t.id); close() }}>
+              <i className="cdot" data-col={t.id} aria-hidden />
+              <span className="pop-item-text"><b>{t.label}</b><small>{t.hint}</small></span>
+              {t.id === target && <Check />}
+            </button>
+          ))}
+        </Popover>
         {text.trim() && !busy && <kbd className="quick-hint">Enter</kbd>}
         <button type="button" className="send" onClick={() => void submit()} disabled={busy || !text.trim()} aria-label="Criar card" title="Criar card (Enter)">
           {busy ? <span className="spinner" /> : <Send />}

@@ -1,7 +1,8 @@
 import { forwardRef } from 'react'
 import type { CSSProperties, HTMLAttributes } from 'react'
 import type { Card } from '../types'
-import { Bolt, Chat, Clip, Hand } from './Icons'
+import { Bolt, Chat, Clip, Hand, Sparkle } from './Icons'
+import { modelSummary } from './ModelPicker'
 
 export const STATUS_LABEL: Record<string, string> = {
   awaiting_approval: 'Aguardando sua aprovação',
@@ -42,9 +43,14 @@ export const CardView = forwardRef<HTMLDivElement, Props>(function CardView({ ca
       {card.description && <p className="card-desc">{card.description}</p>}
       {card.tags.length > 0 && <ul className="tags">{card.tags.map(t => <li key={t}>{t}</li>)}</ul>}
       <div className="card-foot">
-        <span className="card-mode" title={card.mode === 'auto' ? 'Roda sozinha ao entrar em execução' : 'Pede sua aprovação antes de rodar'}>
-          {card.mode === 'auto' ? <Bolt /> : <Hand />}
-          {card.mode === 'auto' ? 'Automático' : 'Com aprovação'}
+        <span className="card-meta">
+          <span className="card-mode" title={card.mode === 'auto' ? 'Roda sozinha ao entrar em execução' : 'Pede sua aprovação antes de rodar'}>
+            {card.mode === 'auto' ? <Bolt /> : <Hand />}
+            {card.mode === 'auto' ? 'Automático' : 'Com aprovação'}
+          </span>
+          {modelSummary(card.model ?? '', card.effort ?? '') && (
+            <span className="card-mode card-model" title="Modelo e esforço das execuções deste card"><Sparkle />{modelSummary(card.model ?? '', card.effort ?? '')}</span>
+          )}
         </span>
         <span className="card-counts">
           {card.attachmentCount > 0 && <span className="card-comments" title="Anexos"><Clip />{card.attachmentCount}</span>}

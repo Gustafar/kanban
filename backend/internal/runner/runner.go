@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"kanban_board/internal/limits"
 	"kanban_board/internal/notify"
 	"kanban_board/internal/proc"
 	"kanban_board/internal/store"
@@ -32,7 +33,23 @@ type Runner struct {
 	queue   []queued                     // runs waiting for a slot (or for their folder), FIFO
 
 	mcpBin, baseURL, token string
+	limitsSink             func(limits.Snapshot)
 }
+
+// modelArgs turns the card's model/effort choice into CLI flags; an empty choice leaves the CLI default.
+func modelArgs(c store.Card) []string {
+	var a []string
+	if c.Model != "" {
+		a = append(a, "--model", c.Model)
+	}
+	if c.Effort != "" {
+		a = append(a, "--effort", c.Effort)
+	}
+	return a
+}
+
+// SetLimitsSink receives the plan-usage snapshot found in each run's stream.
+func (r *Runner) SetLimitsSink(fn func(limits.Snapshot)) { r.limitsSink = fn }
 
 func New(s *store.Store, dataDir string, p Publisher) *Runner {
 	return &Runner{store: s, dataDir: dataDir, publish: p, cancels: map[int64]context.CancelFunc{}, busy: map[int64]bool{}, max: DefaultMaxParallel}
@@ -260,6 +277,7 @@ func (r *Runner) execute(runID int64) {
 	}
 	args := []string{"-p", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "acceptEdits", "--allowedTools", allowed}
+	args = append(args, modelArgs(card)...)
 	if _, err := os.Stat(r.attachDir(card.ID)); err == nil {
 		args = append(args, "--add-dir", r.attachDir(card.ID)) // lets the Read tool open files outside the worktree
 	}
@@ -362,6 +380,10 @@ func (r *Runner) handleLine(runID int64, line []byte) (resultInfo, bool) {
 		_ = r.store.UpdateRun(runID, "", m.SessionID, "", "", "", nil, nil)
 	}
 	switch m.Type {
+	case "rate_limit_event":
+		if s, ok := limits.Parse(line); ok && r.limitsSink != nil {
+			r.limitsSink(s) // the CLI reports the plan's 5h/7d usage on every call
+		}
 	case "assistant":
 		var blocks []struct {
 			Type  string          `json:"type"`

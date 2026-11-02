@@ -1,4 +1,4 @@
-import type { Attachment, Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent, ServerStatus } from './types'
+import type { Attachment, Card, ColumnId, Comment, Inspection, Mode, Project, Run, RunEvent, ServerStatus, UsageReport, Limits } from './types'
 
 type ProjectInput = Pick<Project, 'name' | 'path' | 'color' | 'isolation'>
 
@@ -26,7 +26,7 @@ export const api = {
     req<Card>('POST', `/projects/${pid}/cards`, c),
   quick: (pid: number, c: { text: string; column: ColumnId; mode: Mode }) =>
     req<Card>('POST', `/projects/${pid}/quick`, { description: c.text, column: c.column, mode: c.mode }),
-  updateCard: (id: number, c: { title: string; description: string; mode: Mode; tags?: string[] }) => req<Card>('PUT', `/cards/${id}`, c),
+  updateCard: (id: number, c: { title: string; description: string; mode: Mode; tags?: string[]; model?: string; effort?: string }) => req<Card>('PUT', `/cards/${id}`, c),
   attachments: (cardId: number) => req<Attachment[]>('GET', `/cards/${cardId}/attachments`),
   uploadAttachment: async (cardId: number, file: File) => {
     const res = await fetch(`/api/cards/${cardId}/attachments?name=${encodeURIComponent(file.name || 'colado.png')}`, {
@@ -40,11 +40,15 @@ export const api = {
   moveCard: (id: number, column: ColumnId, position: number) => req<Card>('POST', `/cards/${id}/move`, { column, position }),
   deleteCard: (id: number) => req<void>('DELETE', `/cards/${id}`),
   runCard: (id: number, message = '') => req<Run>('POST', `/cards/${id}/run`, { message }),
+  polishCard: (id: number, message = '') => req<void>('POST', `/cards/${id}/polish`, { message }),
   runs: (cardId: number) => req<Run[]>('GET', `/cards/${cardId}/runs`),
   comments: (cardId: number) => req<Comment[]>('GET', `/cards/${cardId}/comments`),
   addComment: (cardId: number, body: string) => req<Comment>('POST', `/cards/${cardId}/comments`, { body }),
   events: (runId: number) => req<RunEvent[]>('GET', `/runs/${runId}/events`),
   status: () => req<ServerStatus>('GET', '/status'),
+  usage: () => req<UsageReport>('GET', '/usage'),
+  limits: () => req<Limits>('GET', '/limits'),
+  refreshLimits: () => req<Limits>('POST', '/limits/refresh'),
   setMaxParallel: (n: number) => req<ServerStatus>('PUT', '/settings', { maxParallel: n }),
   approve: (runId: number) => req<void>('POST', `/runs/${runId}/approve`),
   cancel: (runId: number) => req<void>('POST', `/runs/${runId}/cancel`),

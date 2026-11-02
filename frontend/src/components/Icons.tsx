@@ -18,4 +18,7 @@ export const Chat = () => <svg {...base}><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20
 export const Search = () => <svg {...base}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
 export const Clip = () => <svg {...base}><path d="m21.4 11-9.2 9.2a5.5 5.5 0 0 1-7.8-7.8l9.2-9.2a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.8 1.8 0 0 1-2.6-2.6l8.5-8.5" /></svg>
 export const Send = () => <svg {...base}><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+export const Chevron = () => <svg {...base}><path d="m6 9 6 6 6-6" /></svg>
+export const Check = () => <svg {...base}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+export const Sparkle = () => <svg {...base}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" /></svg>
 export const Branch = () => <svg {...base}><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7v10M18 10c0 5-12 2-12 7" /></svg>

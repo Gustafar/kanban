@@ -1,0 +1,52 @@
+/* Menu popovers, the capture bar's destination picker and the model/effort picker. Loaded after styles.css. */
+.pop { position: relative; display: inline-flex; }
+.pop-panel {
+  z-index: 60; padding: 6px; overflow-y: auto; overscroll-behavior: contain;
+  border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+  animation: pop-in 0.12s ease-out;
+}
+@keyframes pop-in { from { opacity: 0; } }
+.pop-title { margin: 4px 10px 6px; color: var(--slate); font-size: 12px; }
+.pop-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 9px; background: none; text-align: left; }
+.pop-item:hover, .pop-item:focus-visible { background: var(--surface-2); }
+.pop-item[data-on] { background: var(--accent-soft); }
+.pop-item > svg { flex: none; width: 16px; height: 16px; color: var(--accent); }
+.pop-item-text { display: grid; flex: 1; min-width: 0; line-height: 1.35; }
+.pop-item-text b { font-weight: 600; font-size: 14px; }
+.pop-item-text small { color: var(--slate); font-size: 12px; }
+
+/* standalone column dot (the board's own dots are styled through .column[data-col]) */
+.cdot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--col-backlog); }
+.cdot[data-col='todo'] { background: var(--col-todo); }
+.cdot[data-col='doing'] { background: var(--col-doing); }
+.cdot[data-col='review'] { background: var(--col-review); }
+.cdot[data-col='done'] { background: var(--col-done); }
+
+/* capture bar destination button */
+.target-btn { display: inline-flex; align-items: center; gap: 8px; align-self: flex-end; height: 34px; padding: 0 10px 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font-weight: 550; white-space: nowrap; }
+.target-btn:hover, .target-btn[aria-expanded='true'] { border-color: var(--line-strong); background: var(--surface-2); }
+.target-btn svg { width: 14px; height: 14px; color: var(--slate); }
+.quick .pop { align-self: flex-end; }
+
+/* model and effort picker */
+.model-btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-weight: 550; }
+.model-btn:hover:not(:disabled), .model-btn[aria-expanded='true'] { border-color: var(--line-strong); background: var(--surface-2); }
+.model-btn:disabled { opacity: 0.6; cursor: wait; }
+.model-btn svg:first-child { color: var(--accent); }
+.model-btn svg:last-child { width: 14px; height: 14px; color: var(--slate); }
+.effort { margin: 6px 4px 2px; padding: 12px 10px 8px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.effort-head { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.effort-head b { font-weight: 600; }
+.effort-reset { margin-left: auto; border: 0; background: none; color: var(--accent); font-size: 12px; padding: 0; }
+.effort-reset:hover { text-decoration: underline; }
+.effort-track { position: relative; display: flex; justify-content: space-between; align-items: center; height: 22px; padding: 0 4px; }
+.effort-track::before { content: ''; position: absolute; left: 8px; right: 8px; top: 50%; height: 4px; transform: translateY(-50%); border-radius: 4px; background: var(--lane); }
+.effort-dot { position: relative; width: 14px; height: 14px; padding: 0; border: 2px solid var(--line-strong); border-radius: 50%; background: var(--surface); }
+.effort-dot:hover { border-color: var(--accent); }
+.effort-dot[data-filled] { border-color: var(--accent); background: var(--accent); }
+.effort-dot[data-on] { width: 20px; height: 20px; border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent), inset 0 0 0 4px var(--accent); }
+.effort-hint { margin: 0; color: var(--slate); font-size: 12px; line-height: 1.5; }
+
+/* the card's model badge reuses the mode label look */
+.card-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.card-model { color: var(--accent); }

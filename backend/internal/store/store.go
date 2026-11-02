@@ -37,7 +37,10 @@ type Card struct {
 	Comments    int       `json:"commentCount"`
 	Tags        []string  `json:"tags"`
 	Attachments int       `json:"attachmentCount"`
-	Titling     bool      `json:"titling"` // the AI is still naming/tagging this card (in memory only)
+	Titling     bool      `json:"titling"`   // the AI is still naming/tagging this card (in memory only)
+	Model       string    `json:"model"`     // "" = the CLI's default; otherwise an alias like opus, sonnet, haiku, fable
+	Effort      string    `json:"effort"`    // "" = default; low | medium | high | xhigh | max
+	Polishing   bool      `json:"polishing"` // the AI is discussing/refining this card (in memory only)
 }
 
 type Attachment struct {
@@ -132,8 +135,9 @@ type RunEvent struct {
 }
 
 type Store struct {
-	db      *sql.DB
-	titling sync.Map // cardID -> struct{}: cards the AI is naming right now
+	db        *sql.DB
+	titling   sync.Map // cardID -> struct{}: cards the AI is naming right now
+	polishing sync.Map // cardID -> struct{}: cards the AI is discussing right now
 }
 
 // SetTitling marks (or unmarks) a card as being named by the AI.
@@ -150,6 +154,23 @@ func (s *Store) isTitling(cardID int64) bool {
 	return ok
 }
 
+// SetPolishing marks (or unmarks) a card as being discussed/refined by the AI before it runs.
+func (s *Store) SetPolishing(cardID int64, on bool) {
+	if on {
+		s.polishing.Store(cardID, struct{}{})
+	} else {
+		s.polishing.Delete(cardID)
+	}
+}
+
+func (s *Store) isPolishing(cardID int64) bool {
+	_, ok := s.polishing.Load(cardID)
+	return ok
+}
+
+// IsPolishing reports whether the AI is currently discussing this card (see SetPolishing).
+func (s *Store) IsPolishing(cardID int64) bool { return s.isPolishing(cardID) }
+
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {
@@ -165,6 +186,8 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE projects ADD COLUMN isolation TEXT NOT NULL DEFAULT 'worktree'`,
 		`ALTER TABLE runs ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE cards ADD COLUMN tags TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cards ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cards ADD COLUMN effort TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`,
@@ -319,13 +342,14 @@ const cardSelect = `SELECT c.id,c.project_id,c.title,c.description,c.col,c.posit
 	COALESCE((SELECT status FROM runs r WHERE r.card_id=c.id ORDER BY r.id DESC LIMIT 1),''),
 	(SELECT COUNT(*) FROM comments m WHERE m.card_id=c.id),
 	c.tags,
-	(SELECT COUNT(*) FROM attachments a WHERE a.card_id=c.id)
+	(SELECT COUNT(*) FROM attachments a WHERE a.card_id=c.id),
+	c.model, c.effort
 	FROM cards c`
 
 func scanCard(sc interface{ Scan(...any) error }) (Card, error) {
 	var c Card
 	var tags string
-	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus, &c.Comments, &tags, &c.Attachments)
+	err := sc.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Description, &c.Column, &c.Position, &c.Mode, &c.CreatedAt, &c.UpdatedAt, &c.RunStatus, &c.Comments, &tags, &c.Attachments, &c.Model, &c.Effort)
 	c.Tags = []string{}
 	if tags != "" {
 		c.Tags = strings.Split(tags, ",")
@@ -357,6 +381,7 @@ func (s *Store) GetCard(id int64) (Card, error) {
 		return c, ErrNotFound
 	}
 	c.Titling = s.isTitling(c.ID)
+	c.Polishing = s.isPolishing(c.ID)
 	return c, err
 }
 
@@ -373,6 +398,7 @@ func (s *Store) ListCards(projectID int64) ([]Card, error) {
 			return nil, err
 		}
 		c.Titling = s.isTitling(c.ID)
+		c.Polishing = s.isPolishing(c.ID)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -385,6 +411,14 @@ func (s *Store) UpdateCard(id int64, title, description, mode string) (Card, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Card{}, ErrNotFound
+	}
+	return s.GetCard(id)
+}
+
+// SetCardModel stores which model and effort level the card's runs use ("" = the CLI default).
+func (s *Store) SetCardModel(id int64, model, effort string) (Card, error) {
+	if _, err := s.db.Exec(`UPDATE cards SET model=?,effort=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, model, effort, id); err != nil {
+		return Card{}, err
 	}
 	return s.GetCard(id)
 }

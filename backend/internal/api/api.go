@@ -8,10 +8,13 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"kanban_board/internal/limits"
 	"kanban_board/internal/runner"
 	"kanban_board/internal/store"
 )
@@ -23,6 +26,10 @@ type Server struct {
 	token   string
 	dataDir string
 	static  fs.FS // optional embedded frontend
+
+	limits    *limits.Tracker // plan usage windows (5h / 7d), fed by every Claude call
+	probeMu   sync.Mutex
+	lastProbe time.Time
 }
 
 func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
@@ -41,6 +48,21 @@ func New(s *store.Store, dataDir, token string, static fs.FS) (*Server, *Hub) {
 	}
 	srv.runner.SetMax(limit)
 	srv.reconcileAcceptedRuns()
+
+	// plan limits: persisted so the panel is not empty after a restart; every run's stream refreshes them
+	srv.limits = limits.NewTracker(
+		func() (limits.Snapshot, bool) {
+			var sn limits.Snapshot
+			v, ok := s.GetSetting("limits")
+			return sn, ok && json.Unmarshal([]byte(v), &sn) == nil
+		},
+		func(sn limits.Snapshot) {
+			if b, err := json.Marshal(sn); err == nil {
+				_ = s.SetSetting("limits", string(b))
+			}
+		},
+	)
+	srv.runner.SetLimitsSink(func(sn limits.Snapshot) { hub.Publish("limits", srv.limits.Set(sn)) })
 	return srv, hub
 }
 
@@ -52,6 +74,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/events", s.sse)
 
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/usage", s.usage)
+	mux.HandleFunc("GET /api/limits", s.getLimits)
+	mux.HandleFunc("POST /api/limits/refresh", s.refreshLimits)
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	mux.HandleFunc("GET /api/inspect", s.inspect)
 	mux.HandleFunc("POST /api/git/init", s.gitInit)
@@ -67,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/cards/{id}/move", s.moveCard)
 	mux.HandleFunc("DELETE /api/cards/{id}", s.deleteCard)
 	mux.HandleFunc("POST /api/cards/{id}/run", s.runCard)
+	mux.HandleFunc("POST /api/cards/{id}/polish", s.polishCard)
 	mux.HandleFunc("GET /api/cards/{id}/runs", s.listRuns)
 	mux.HandleFunc("POST /api/projects/{id}/quick", s.quickCard)
 	mux.HandleFunc("GET /api/cards/{id}/attachments", s.listAttachments)
@@ -234,6 +260,26 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.runner.Status())
 }
 
+// usage reports how much Claude Code cost/tokens this board has spent, overall, per project and per day.
+func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
+	total, err := s.store.GetUsage()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	byProject, err := s.store.UsageByProject()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	byDay, err := s.store.UsageByDay(30)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"total": total, "byProject": byProject, "byDay": byDay})
+}
+
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		MaxParallel int `json:"maxParallel"`
@@ -334,6 +380,20 @@ type cardBody struct {
 	Mode        string    `json:"mode"`
 	Position    float64   `json:"position"`
 	Tags        *[]string `json:"tags"` // nil = leave tags untouched
+	Model       *string   `json:"model"`
+	Effort      *string   `json:"effort"`
+}
+
+var modelRe = regexp.MustCompile(`^[a-z][a-z0-9.\-\[\]]{0,40}$`) // an alias or a full id; never starts with "-" so it cannot pose as a flag
+
+func validModel(m string) bool { return m == "" || modelRe.MatchString(m) }
+
+func validEffort(e string) bool {
+	switch e {
+	case "", "low", "medium", "high", "xhigh", "max":
+		return true
+	}
+	return false
 }
 
 func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
@@ -400,6 +460,22 @@ func (s *Server) updateCard(w http.ResponseWriter, r *http.Request) {
 	if b.Tags != nil {
 		if tc, err := s.store.SetCardTitleAndTags(c.ID, "", *b.Tags); err == nil {
 			c = tc
+		}
+	}
+	if b.Model != nil || b.Effort != nil { // either may be sent alone; the other keeps its value
+		model, effort := c.Model, c.Effort
+		if b.Model != nil {
+			model = strings.TrimSpace(*b.Model)
+		}
+		if b.Effort != nil {
+			effort = strings.TrimSpace(*b.Effort)
+		}
+		if !validModel(model) || !validEffort(effort) {
+			badRequest(w, "modelo ou esforço inválido")
+			return
+		}
+		if mc, err := s.store.SetCardModel(c.ID, model, effort); err == nil {
+			c = mc
 		}
 	}
 	s.hub.Publish("card", c)
@@ -471,6 +547,27 @@ func (s *Server) runCard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 202, run)
+}
+
+// polishCard asks the AI to discuss/refine the card before it runs: read-only, no run is created.
+func (s *Server) polishCard(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Message string `json:"message"`
+	}
+	_ = decode(r, &b)
+	c, err := s.store.GetCard(pathID(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if msg := strings.TrimSpace(b.Message); msg != "" {
+		if _, err := s.comment(c.ID, "user", msg); err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	s.runner.Polish(c)
+	w.WriteHeader(202)
 }
 
 // ---- comments ----
