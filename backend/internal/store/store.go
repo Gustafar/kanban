@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -36,6 +37,7 @@ type Card struct {
 	Comments    int       `json:"commentCount"`
 	Tags        []string  `json:"tags"`
 	Attachments int       `json:"attachmentCount"`
+	Titling     bool      `json:"titling"` // the AI is still naming/tagging this card (in memory only)
 }
 
 type Attachment struct {
@@ -100,7 +102,24 @@ type RunEvent struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db      *sql.DB
+	titling sync.Map // cardID -> struct{}: cards the AI is naming right now
+}
+
+// SetTitling marks (or unmarks) a card as being named by the AI.
+func (s *Store) SetTitling(cardID int64, on bool) {
+	if on {
+		s.titling.Store(cardID, struct{}{})
+	} else {
+		s.titling.Delete(cardID)
+	}
+}
+
+func (s *Store) isTitling(cardID int64) bool {
+	_, ok := s.titling.Load(cardID)
+	return ok
+}
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
@@ -303,6 +322,7 @@ func (s *Store) GetCard(id int64) (Card, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
+	c.Titling = s.isTitling(c.ID)
 	return c, err
 }
 
@@ -318,6 +338,7 @@ func (s *Store) ListCards(projectID int64) ([]Card, error) {
 		if err != nil {
 			return nil, err
 		}
+		c.Titling = s.isTitling(c.ID)
 		out = append(out, c)
 	}
 	return out, rows.Err()

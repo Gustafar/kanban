@@ -28,11 +28,13 @@ export const CardView = forwardRef<HTMLDivElement, Props>(function CardView({ ca
       className="card"
       data-status={status || undefined}
       data-dragging={dragging || undefined}
+      data-titling={card.titling || undefined}
       style={style as CSSProperties}
       role="button"
       tabIndex={0}
       {...rest}
     >
+      {card.titling && <div className="naming" role="status"><i aria-hidden />IA nomeando…</div>}
       <div className="card-title">{card.title}</div>
       {card.description && <p className="card-desc">{card.description}</p>}
       {card.tags.length > 0 && <ul className="tags">{card.tags.map(t => <li key={t}>{t}</li>)}</ul>}

@@ -47,6 +47,19 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
 
   const run = runs[0] // newest first
   const runId = run?.id
+  // Fields the user has not touched follow the server, so an AI title arriving while the drawer is open
+  // shows up instead of being kept stale (and later overwritten by "Salvar").
+  const synced = useRef({ title: card.title, description: card.description, mode: card.mode, tags: card.tags.join(', ') })
+  useEffect(() => {
+    const prev = synced.current
+    const next = { title: card.title, description: card.description, mode: card.mode, tags: card.tags.join(', ') }
+    setTitle(t => (t === prev.title ? next.title : t))
+    setDescription(d => (d === prev.description ? next.description : d))
+    setMode(m => (m === prev.mode ? next.mode : m))
+    setTagsText(t => (t === prev.tags ? next.tags : t))
+    synced.current = next
+  }, [card.title, card.description, card.mode, card.tags.join(', ')]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const tagList = tagsText.split(',').map(t => t.trim()).filter(Boolean)
   const dirty = title !== card.title || description !== card.description || mode !== card.mode || tagList.join(', ') !== card.tags.join(', ')
 
@@ -110,6 +123,7 @@ export function CardDrawer({ card, project, subscribe, onClose, onError }: Props
         </header>
 
         <div className="drawer-scroll">
+          {card.titling && <div className="naming" role="status"><i aria-hidden />A IA está nomeando e marcando este card…</div>}
           <textarea
             className="title-input" rows={2} value={title} onChange={e => setTitle(e.target.value.replace(/\n/g, ' '))} aria-label="Título"
             onKeyDown={e => { if (e.key === 'Enter') e.preventDefault() }}

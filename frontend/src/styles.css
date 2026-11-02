@@ -182,6 +182,9 @@ kbd { display: inline-block; padding: 1px 7px; border: 1px solid var(--line-stro
 .card[data-status='running'] { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
 @keyframes flow { to { background-position: 0 -300%; } }
 
+.naming { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--accent); font-size: 12px; font-weight: 600; }
+.naming i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: ping 1.4s ease-out infinite; }
+.card[data-titling] .card-title { opacity: 0.65; }
 .card-title { font-weight: 600; font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
 .card-desc { margin: 5px 0 0; color: var(--slate); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tags { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 5px; }
@@ -328,6 +331,7 @@ kbd { display: inline-block; padding: 1px 7px; border: 1px solid var(--line-stro
 .toast.warn { background: var(--amber); color: #1b1300; }
 .toast.note span { opacity: 0.8; }
 .toast.note[data-kind='failed'] { background: var(--rose); color: #fff; }
+.toast.note[data-kind='warn'] { background: var(--amber); color: #1b1300; }
 .toast.note[data-kind='succeeded'] { background: var(--moss); color: #04170d; }
 
 /* ---------- responsive ---------- */

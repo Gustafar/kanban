@@ -41,14 +41,20 @@ func (s *Server) quickCard(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	s.store.SetTitling(c.ID, true)
+	c.Titling = true
 	s.hub.Publish("card", c)
 	if c.Column == "doing" {
 		s.runner.Request(c, "")
 	}
 	go func() {
 		title, tags, err := titler.Generate(context.Background(), text)
+		s.store.SetTitling(c.ID, false)
 		if err != nil {
 			log.Printf("título automático do card #%d falhou: %v", c.ID, err)
+			s.republishCard(c.ID) // clears the "naming…" state
+			s.hub.Publish("notify", map[string]any{"kind": "warn", "title": "A IA não conseguiu nomear o card",
+				"body": "Ficou com o título provisório. Dá para renomear na gaveta.", "cardId": c.ID})
 			return
 		}
 		// the card may have been deleted or renamed by hand meanwhile: only replace the provisional title

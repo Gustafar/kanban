@@ -31,9 +31,12 @@ func Generate(parent context.Context, text string) (string, []string, error) {
 	if r := []rune(text); len(r) > 4000 {
 		text = string(r[:4000])
 	}
+	// A minimal system prompt and no extended thinking cut this call from ~10s to ~4s.
 	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", "haiku", "--tools", "",
-		"--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config", "--output-format", "json")
+		"--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config", "--output-format", "json",
+		"--system-prompt", "Você dá nome a tarefas. Responda somente com o JSON pedido.")
 	proc.Hide(cmd)
+	cmd.Env = append(os.Environ(), "MAX_THINKING_TOKENS=0")
 	cmd.Dir = os.TempDir()
 	cmd.Stdin = strings.NewReader(fmt.Sprintf(prompt, text))
 	var out, errb bytes.Buffer
